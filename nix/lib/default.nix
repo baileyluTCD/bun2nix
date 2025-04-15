@@ -9,5 +9,7 @@ eachSystem (
   in
   {
     mkBunDerivation = pkgs.callPackage ./mkBunDerivation.nix { };
+
+    treefmt = inputs.treefmt-nix.lib.evalModule pkgs (import ./treefmt-config.nix);
   }
 )
