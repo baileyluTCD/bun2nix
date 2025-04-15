@@ -16,6 +16,9 @@ pkgs.mkShell {
     pkg-config
     openssl
 
+    # Docs
+    mdbook
+
     # Javascript dependencies
     bun
   ];

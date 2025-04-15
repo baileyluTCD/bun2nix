@@ -1,0 +1,6 @@
+[book]
+authors = ["Luke Bailey"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Bun2Nix - Documentation"
