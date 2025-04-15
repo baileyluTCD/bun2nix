@@ -1,3 +1,6 @@
 # Summary
 
-- [Chapter 1](./chapter_1.md)
+- [Bun2Nix - Introduction](./bun2nix.md)
+- [Installation](./installation.md)
+    - [From A Template](./template-installation.md)
+    - [In a pre-existing flake](./flake-installation.md)
