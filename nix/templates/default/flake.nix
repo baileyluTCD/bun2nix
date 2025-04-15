@@ -1,5 +1,5 @@
 {
-  description = "Bun2Nix react sample";
+  description = "Bun2Nix minimal sample";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
@@ -34,12 +34,12 @@
         pkgs = import nixpkgs { inherit system; };
 
         # Call our package with the bun2nix library functions
-        react-site = pkgs.callPackage ./default.nix {
+        minimal = pkgs.callPackage ./default.nix {
           inherit (bun2nix.lib.${system}) mkBunDerivation;
         };
       in
       {
-        packages.default = react-site;
+        packages.default = minimal;
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [

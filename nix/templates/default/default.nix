@@ -1,5 +1,5 @@
-{ bun2nix, ... }:
-bun2nix.mkBunDerivation {
+{ mkBunDerivation, ... }:
+mkBunDerivation {
   name = "minimal-bun2nix-example";
   version = "1.0.0";
 
