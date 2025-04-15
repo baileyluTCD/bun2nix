@@ -1,4 +1,11 @@
-{ pkgs, ... }:
+{
+  bun,
+  callPackage,
+  lib,
+  rsync,
+  stdenv,
+  ...
+}:
 {
   name,
   version,
@@ -7,13 +14,13 @@
   ...
 }@args:
 let
-  bunDeps = pkgs.callPackage bunNix { };
+  bunDeps = callPackage bunNix { };
 in
-pkgs.stdenv.mkDerivation (
+stdenv.mkDerivation (
   {
     inherit name version src;
 
-    nativeBuildInputs = with pkgs; [
+    nativeBuildInputs = [
       rsync
       bun
     ];
@@ -44,7 +51,7 @@ pkgs.stdenv.mkDerivation (
 
     # Create a react static html site as per the script
     buildPhase =
-      assert pkgs.lib.assertMsg (args.index != null)
+      assert lib.assertMsg (args.index != null)
         "`index` input to `mkBunDerivation` pointing to your javascript index file must be set in order to use the default buildPhase";
       ''
         runHook preBuild

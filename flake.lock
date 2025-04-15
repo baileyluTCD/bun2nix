@@ -5,7 +5,9 @@
         "nixpkgs": [
           "nixpkgs"
         ],
-        "systems": "systems"
+        "systems": [
+          "systems"
+        ]
       },
       "locked": {
         "lastModified": 1744632722,
@@ -41,6 +43,7 @@
       "inputs": {
         "blueprint": "blueprint",
         "nixpkgs": "nixpkgs",
+        "systems": "systems",
         "treefmt-nix": "treefmt-nix"
       }
     },
