@@ -7,7 +7,7 @@
   ...
 }:
 {
-  name,
+  pname,
   version,
   src,
   bunNix,
@@ -18,7 +18,7 @@ let
 in
 stdenv.mkDerivation (
   {
-    inherit name version src;
+    inherit pname version src;
 
     nativeBuildInputs = [
       rsync
@@ -63,7 +63,7 @@ stdenv.mkDerivation (
           --sourcemap \
           --bytecode \
           ${args.index} \
-          --outfile ${name}
+          --outfile ${pname}
 
         runHook postBuild
       '';
@@ -74,13 +74,16 @@ stdenv.mkDerivation (
 
       mkdir -p $out/bin
 
-      cp ./${name} $out/bin
+      cp ./${pname} $out/bin
 
       runHook postInstall
     '';
 
     # Bun binaries are broken by fixup phase
     dontFixup = true;
+  }
+  // lib.optionalAttrs (args.buildPhase == null && args.installPhase == null) {
+    meta.mainProgram = pname;
   }
   // args
 )
