@@ -2,3 +2,7 @@
 .direnv
 result
 .cache
+
+book
+node_modules
+dist

@@ -15,7 +15,7 @@ use crate::{
 ///
 /// A chunk of nix code to be written to stdout or a file
 #[derive(Template)]
-#[template(path = "output.nix")]
+#[template(path = "output.nix_template")]
 pub struct NixExpression {
     packages: Vec<Package<Normalized>>,
 }

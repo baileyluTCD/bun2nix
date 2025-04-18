@@ -3,74 +3,20 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
+    systems.url = "github:nix-systems/default";
 
-    pre-commit-hooks = {
-      url = "github:cachix/git-hooks.nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    blueprint.url = "github:numtide/blueprint";
+    blueprint.inputs.nixpkgs.follows = "nixpkgs";
+    blueprint.inputs.systems.follows = "systems";
+
+    treefmt-nix.url = "github:numtide/treefmt-nix";
+    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = {
-    nixpkgs,
-    flake-utils,
-    pre-commit-hooks,
-    ...
-  }:
-    flake-utils.lib.eachDefaultSystem (system: let
-      pkgs = import nixpkgs {inherit system;};
-
-      bun2nix = pkgs.callPackage ./default.nix {};
-    in {
-      defaultPackage = bun2nix;
-
-      defaultApp = {
-        type = "app";
-        program = "${bun2nix.bin}/bin/bun2nix";
-      };
-
-      checks = {
-        pre-commit-check = pre-commit-hooks.lib.${system}.run {
-          src = ./.;
-          hooks = {
-            cargo-check.enable = true;
-            clippy.enable = true;
-            rustfmt.enable = true;
-          };
-        };
-      };
-
-      devShells.default = pkgs.mkShell {
-        packages = with pkgs; [
-          # Rust dependencies
-          rustc
-          cargo
-          rustfmt
-          clippy
-          mold
-
-          # Database
-          sqlx-cli
-          sqlite
-
-          # SSL
-          pkg-config
-          openssl
-
-          # Javascript dependencies
-          bun
-        ];
-
-        env = with pkgs; {
-          RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
-          LD_LIBRARY_PATH = lib.makeLibraryPath [openssl];
-          DATABASE_URL = "sqlite://.cache/bun2nix";
-        };
-
-        shellHook = ''
-          mkdir .cache
-          touch .cache/bun2nix
-        '';
-      };
-    });
+  outputs =
+    inputs:
+    inputs.blueprint {
+      inherit inputs;
+      prefix = "nix/";
+    };
 }

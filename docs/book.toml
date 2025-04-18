@@ -1,0 +1,12 @@
+[book]
+authors = ["Luke Bailey"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Bun2Nix - Documentation"
+
+[output.html]
+additional-head = "head.html"
+git-repository-url = "https://github.com/baileyluTCD/bun2nix"
+git-repository-icon = "fa-github"
+preferred-dark-theme = "ayu"
