@@ -14,7 +14,7 @@ However, if you run without the `-o` flag it will produce a text output over std
 
 ## Cache
 
-`bun2nix` currently uses an sqlite cache for storing prefetched hashes which has to be cleared manually with `bun2nix cache clear`. 
+`bun2nix` currently uses an sqlite cache for storing prefetched hashes which has to be cleared manually with `bun2nix cache clear`.
 
 > This is likely to change soon, see [here](https://github.com/baileyluTCD/bun2nix/issues/2) for details.
 
@@ -34,7 +34,7 @@ Commands:
 Options:
   -l, --lock-file <LOCK_FILE>
           The Bun (v1.2+) lockfile to use to produce the Nix expression
-          
+
           [default: ./bun.lock]
 
   -o, --output-file <OUTPUT_FILE>
@@ -42,9 +42,9 @@ Options:
 
   -c, --cache-location <CACHE_LOCATION>
           The sqlite database to use as the cache - will be created if it does not exist.
-          
+
           Default value of <system cache directory>/bun2nix is assigned when no value is passed to `cache_location`.
-          
+
           [default: ~/.cache/bun2nix]
 
       --disable-cache
@@ -56,4 +56,3 @@ Options:
   -V, --version
           Print version
 ```
-

@@ -1,6 +1,7 @@
 # From A Template
 
 By default 2 templates are offered for starting off a new project with bun2nix enabled by default:
+
 - A minimal hello world binary program - the default.
 - A basic react website and server setup.
 

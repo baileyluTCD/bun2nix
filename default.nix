@@ -50,22 +50,25 @@ in
   };
 
   # Custom builder function for `bun2nix` packages
-  mkBunDerivation = {
-    name,
-    version,
-    src,
-    bunNix,
-    buildFlags ? [
-      "--compile"
-      "--minify"
-      "--sourcemap"
-      "--bytecode"
-    ],
-    ...
-  } @ args: let
-    bunDeps = callPackage bunNix {};
-  in
-    stdenv.mkDerivation ({
+  mkBunDerivation =
+    {
+      name,
+      version,
+      src,
+      bunNix,
+      buildFlags ? [
+        "--compile"
+        "--minify"
+        "--sourcemap"
+        "--bytecode"
+      ],
+      ...
+    }@args:
+    let
+      bunDeps = callPackage bunNix { };
+    in
+    stdenv.mkDerivation (
+      {
         inherit name version src;
 
         nativeBuildInputs = [
@@ -102,12 +105,12 @@ in
           assert lib.assertMsg (args.index != null)
             "`index` input to `mkBunDerivation` pointing to your javascript index file must be set in order to use the default buildPhase";
           ''
-            runHook preBuild
+              runHook preBuild
 
-          # Create a bun binary with all the highest compile time optimizations enabled
-          bun build ${lib.concatStringsSep " " buildFlags} ${args.index} --outfile ${name}
+            # Create a bun binary with all the highest compile time optimizations enabled
+            bun build ${lib.concatStringsSep " " buildFlags} ${args.index} --outfile ${name}
 
-            runHook postBuild
+              runHook postBuild
           '';
 
         # Install the binary to the output folder
