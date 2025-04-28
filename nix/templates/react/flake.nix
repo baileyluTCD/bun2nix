@@ -47,6 +47,10 @@
             # Add the bun2nix binary to our devshell
             bun2nix.packages.${system}.default
           ];
+
+          shellHook = ''
+            bun install --frozen-lockfile
+          '';
         };
       }
     );

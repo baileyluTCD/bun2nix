@@ -4,7 +4,10 @@ Example project created with `bun init` to show usage of `bun2nix`, a fast bun p
 
 This project builds a simple react website to show off module loading.
 
-To try it out use `nix build .`, then `cd result/dist` and start a http server of your choice in that folder (I would recommend httplz `nix shell nixpkgs#httplz --command httplz .`)
+To try it out enter the dev shell (`nix develop`)
+and build the project with `nix build .`, 
+then `cd result/dist` and start a http server of your choice in that folder 
+(I would recommend httplz `nix shell nixpkgs#httplz --command httplz .`)
 
 ## Notable files
 
@@ -12,5 +15,5 @@ The main files of note are:
 
 - `flake.nix` -> Contains basic project setup for a nix flake for `bun2nix`
 - `default.nix` -> Contains build instructions for this bun package
-- `bun.nix` -> Generated bun expression from `bun.lock`
+- `bun.nix` -> Generated after install from `bun.lock`. Contains the dependency information in a nix-friendly format.
 - `package.json` -> Standard Javascript `package.json` with a `postinstall` script pointing to `bun2nix`
