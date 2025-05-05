@@ -7,9 +7,15 @@
   "type": "module",
   "private": true,
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/lodash": "latest",
+    "@types/is-even": "latest"
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "dependencies": {
+    "lodash": "github:lodash/lodash",
+    "is-even": "git+https://gitlab.com/iamashley0/is-even-min.git"
   }
 }

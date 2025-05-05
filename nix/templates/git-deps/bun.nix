@@ -24,6 +24,12 @@
     url = "https://registry.npmjs.org/bun-types/-/bun-types-1.2.4.tgz";
     hash = "sha512-nDPymR207ZZEoWD4AavvEaa/KZe/qlrbMSchqpQwovPZCKc7pwMoENjEtHgMKaAjJhy+x6vfqSBA1QU3bJgs0Q==";
   };
+  "react" = {
+    out_path = "react";
+    name = "react@19.1.0";
+    url = "https://registry.npmjs.org/react/-/react-19.1.0.tgz";
+    hash = "sha512-FS+XFBNvn3GTAWq26joslQgWNoFu08F4kl0J4CgdNKADkdSGXQyTCnKteIAJy96Br6YbpEU1LSzV5dYtjMkMDg==";
+  };
   "typescript" = {
     out_path = "typescript";
     binaries = {

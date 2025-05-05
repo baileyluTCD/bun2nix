@@ -3,8 +3,14 @@
   "workspaces": {
     "": {
       "name": "examples",
+      "dependencies": {
+        "is-even": "git+https://gitlab.com/iamashley0/is-even-min.git",
+        "lodash": "github:lodash/lodash",
+      },
       "devDependencies": {
         "@types/bun": "latest",
+        "@types/is-even": "latest",
+        "@types/lodash": "latest",
       },
       "peerDependencies": {
         "typescript": "^5",
@@ -14,11 +20,19 @@
   "packages": {
     "@types/bun": ["@types/bun@1.2.4", "", { "dependencies": { "bun-types": "1.2.4" } }, "sha512-QtuV5OMR8/rdKJs213iwXDpfVvnskPXY/S0ZiFbsTjQZycuqPbMW8Gf/XhLfwE5njW8sxI2WjISURXPlHypMFA=="],
 
+    "@types/is-even": ["@types/is-even@1.0.2", "", {}, "sha512-qXDiw1zrRSrExwuJHRvxr5eGANlWscPwvQw3xURyax0GkY+fSwwei2uy0ReJBF2N0EeniUr+h2iD9e/KQNroaQ=="],
+
+    "@types/lodash": ["@types/lodash@4.17.16", "", {}, "sha512-HX7Em5NYQAXKW+1T+FiuG27NGwzJfCX3s1GjOa7ujxZa52kjJLOr4FUxT+giF6Tgxv1e+/czV/iTtBw27WTU9g=="],
+
     "@types/node": ["@types/node@22.13.5", "", { "dependencies": { "undici-types": "~6.20.0" } }, "sha512-+lTU0PxZXn0Dr1NBtC7Y8cR21AJr87dLLU953CWA6pMxxv/UDc7jYAY90upcrie1nRcD6XNG5HOYEDtgW5TxAg=="],
 
     "@types/ws": ["@types/ws@8.5.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-bd/YFLW+URhBzMXurx7lWByOu+xzU9+kb3RboOteXYDfW+tr+JZa99OyNmPINEGB/ahzKrEuc8rcv4gnpJmxTw=="],
 
     "bun-types": ["bun-types@1.2.4", "", { "dependencies": { "@types/node": "*", "@types/ws": "~8.5.10" } }, "sha512-nDPymR207ZZEoWD4AavvEaa/KZe/qlrbMSchqpQwovPZCKc7pwMoENjEtHgMKaAjJhy+x6vfqSBA1QU3bJgs0Q=="],
+
+    "is-even": ["is-even-min@git+https://gitlab.com/iamashley0/is-even-min.git#0af22132d7abba2b7c4bb94f1887ca30b1b102aa", {}, "0af22132d7abba2b7c4bb94f1887ca30b1b102aa"],
+
+    "lodash": ["lodash@github:lodash/lodash#8a26eb4", {}, "lodash-lodash-8a26eb4"],
 
     "typescript": ["typescript@5.7.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-84MVSjMEHP+FQRPy3pX9sTVV/INIex71s9TL2Gm5FG/WG1SqXeKyZ0k7/blY/4FdOzI12CBy1vGc4og/eus0fw=="],
 
