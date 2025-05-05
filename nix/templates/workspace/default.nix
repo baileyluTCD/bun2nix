@@ -32,7 +32,9 @@ mkBunDerivation {
 
   installPhase = ''
     mkdir -p $out/bin
-    cp dist/app $out/bin/
-    chmod +x $out/bin/app
+
+    cp dist/app $out/bin/workspace-test-app;
+
+    chmod +x $out/bin/workspace-test-app
   '';
 }
