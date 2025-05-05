@@ -4,8 +4,9 @@
     "": {
       "name": "examples",
       "dependencies": {
-        "is-even": "git+https://gitlab.com/iamashley0/is-even-min.git",
+        "is-even": "git+ssh://gitlab.com/iamashley0/is-even-min.git",
         "lodash": "github:lodash/lodash",
+        "zod": "https://registry.npmjs.org/zod/-/zod-3.21.4.tgz",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -30,12 +31,14 @@
 
     "bun-types": ["bun-types@1.2.4", "", { "dependencies": { "@types/node": "*", "@types/ws": "~8.5.10" } }, "sha512-nDPymR207ZZEoWD4AavvEaa/KZe/qlrbMSchqpQwovPZCKc7pwMoENjEtHgMKaAjJhy+x6vfqSBA1QU3bJgs0Q=="],
 
-    "is-even": ["is-even-min@git+https://gitlab.com/iamashley0/is-even-min.git#0af22132d7abba2b7c4bb94f1887ca30b1b102aa", {}, "0af22132d7abba2b7c4bb94f1887ca30b1b102aa"],
+    "is-even": ["is-even-min@git+ssh://gitlab.com/iamashley0/is-even-min.git#0af22132d7abba2b7c4bb94f1887ca30b1b102aa", {}, "0af22132d7abba2b7c4bb94f1887ca30b1b102aa"],
 
     "lodash": ["lodash@github:lodash/lodash#8a26eb4", {}, "lodash-lodash-8a26eb4"],
 
     "typescript": ["typescript@5.7.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-84MVSjMEHP+FQRPy3pX9sTVV/INIex71s9TL2Gm5FG/WG1SqXeKyZ0k7/blY/4FdOzI12CBy1vGc4og/eus0fw=="],
 
     "undici-types": ["undici-types@6.20.0", "", {}, "sha512-Ny6QZ2Nju20vw1SRHe3d9jVu6gJ+4e3+MMpqu7pqE5HT6WsTSlce++GQmK5UXS8mzV8DSYHrQH+Xrf2jVcuKNg=="],
+
+    "zod": ["zod@https://registry.npmjs.org/zod/-/zod-3.21.4.tgz", {}],
   }
 }

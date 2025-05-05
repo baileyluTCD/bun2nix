@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "lodash": "github:lodash/lodash",
-    "is-even": "git+https://gitlab.com/iamashley0/is-even-min.git"
+    "is-even": "git+ssh://gitlab.com/iamashley0/is-even-min.git",
+    "zod": "https://registry.npmjs.org/zod/-/zod-3.21.4.tgz"
   }
 }
