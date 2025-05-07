@@ -11,11 +11,6 @@ pkgs.rustPlatform.buildRustPackage {
 
   src = ../.;
 
-  buildInputs = with pkgs; [
-    pkg-config
-    openssl
-  ];
-
   cargoLock = {
     lockFile = ../Cargo.lock;
   };

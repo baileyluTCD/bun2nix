@@ -8,14 +8,16 @@ use std::{
 use serde::{Deserialize, Serialize};
 use state::State;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 mod binaries;
+mod identifier;
 mod metadata;
 mod normalized_binary;
 mod state;
 
 pub use binaries::Binaries;
+pub use identifier::Identifier;
 pub use metadata::MetaData;
 pub use normalized_binary::NormalizedBinary;
 pub use state::{Extracted, Normalized};
@@ -27,14 +29,14 @@ pub use state::{Extracted, Normalized};
 /// An individual package found in a bun lockfile.
 pub struct Package<D: State> {
     /// The prefetched package hash
-    pub hash: String,
+    pub hash: Option<String>,
 
     /// The name of the package, as found in the `./node_modules` directory or in an import
     /// statement
     pub name: String,
 
     /// The package's identifier string for fetching from npm
-    pub npm_identifier: String,
+    pub identifier: Identifier,
 
     /// The state the package is currently in
     pub data: D,
@@ -44,50 +46,18 @@ impl Package<Extracted> {
     /// # Package Constructor
     ///
     /// Produce a new instance of a just extracted package
-    pub fn new(name: String, npm_identifier: String, hash: String, binaries: Binaries) -> Self {
+    pub fn new(
+        name: String,
+        identifier: Identifier,
+        hash: Option<String>,
+        binaries: Binaries,
+    ) -> Self {
         Self {
             name,
-            npm_identifier,
+            identifier,
             hash,
             data: Extracted { binaries },
         }
-    }
-
-    /// # NPM url converter
-    ///
-    /// Produce a url needed to fetch from the npm api from a package
-    ///
-    /// ## Usage
-    ///```rust
-    /// use bun2nix::Package;
-    ///
-    /// let package = Package {
-    ///     npm_identifier: "@alloc/quick-lru@5.2.0".to_owned(),
-    ///     ..Default::default()
-    /// };
-    ///
-    /// assert_eq!(package.to_npm_url().unwrap(), "https://registry.npmjs.org/@alloc/quick-lru/-/quick-lru-5.2.0.tgz")
-    /// ```
-    pub fn to_npm_url(&self) -> Result<String> {
-        let Some((user, name_and_ver)) = self.npm_identifier.split_once("/") else {
-            let Some((name, ver)) = self.npm_identifier.split_once("@") else {
-                return Err(Error::NoAtInPackageIdentifier);
-            };
-
-            return Ok(format!(
-                "https://registry.npmjs.org/{}/-/{}-{}.tgz",
-                name, name, ver
-            ));
-        };
-
-        let Some((name, ver)) = name_and_ver.split_once("@") else {
-            return Err(Error::NoAtInPackageIdentifier);
-        };
-
-        Ok(format!(
-            "https://registry.npmjs.org/{}/{}/-/{}-{}.tgz",
-            user, name, name, ver
-        ))
     }
 
     /// # Normalize Packages
@@ -99,10 +69,10 @@ impl Package<Extracted> {
         Ok(Package {
             data: Normalized {
                 out_path: Normalized::convert_name_to_out_path(&self.name),
-                url: self.to_npm_url()?,
+                url: self.identifier.to_url()?,
                 binaries: self.data.binaries.normalize(&self.name),
             },
-            npm_identifier: self.npm_identifier,
+            identifier: self.identifier,
             hash: self.hash,
             name: self.name,
         })
@@ -112,13 +82,13 @@ impl Package<Extracted> {
 impl<D: State> Hash for Package<D> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
-        self.npm_identifier.hash(state);
+        self.identifier.hash(state);
     }
 }
 
 impl<D: State> PartialEq for Package<D> {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.npm_identifier == other.npm_identifier
+        self.name == other.name && self.identifier == other.identifier
     }
 }
 
@@ -132,6 +102,6 @@ impl<D: State> Eq for Package<D> {}
 
 impl<D: State> Ord for Package<D> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (&self.name, &self.npm_identifier).cmp(&(&other.name, &other.npm_identifier))
+        (&self.name, &self.identifier).cmp(&(&other.name, &other.identifier))
     }
 }

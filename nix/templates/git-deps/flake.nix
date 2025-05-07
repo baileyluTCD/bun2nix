@@ -1,5 +1,5 @@
 {
-  description = "Bun2Nix workspace sample";
+  description = "Bun2Nix git dependencies sample";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";

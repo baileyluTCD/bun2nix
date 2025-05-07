@@ -1,0 +1,22 @@
+{
+  "name": "examples",
+  "scripts": {
+    "postinstall": "bun2nix -o bun.nix"
+  },
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/lodash": "latest",
+    "@types/is-even": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "lodash": "github:lodash/lodash",
+    "is-even": "git+ssh://gitlab.com/iamashley0/is-even-min.git",
+    "zod": "https://registry.npmjs.org/zod/-/zod-3.21.4.tgz"
+  }
+}
