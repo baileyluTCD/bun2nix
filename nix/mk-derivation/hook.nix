@@ -31,16 +31,10 @@ in
         ];
         substitutions = {
           resolveCatalogTs = ./resolve-catalog.ts;
-          bunDefaultInstallFlags =
-            if pkgs.stdenv.hostPlatform.isDarwin then
-              [
-                "--linker=isolated"
-                "--backend=symlink"
-              ]
-            else
-              [
-                "--linker=isolated"
-              ];
+          bunDefaultInstallFlags = [
+            "--linker=isolated"
+            "--backend=symlink"
+          ];
         };
       } ./hook.sh;
     };
