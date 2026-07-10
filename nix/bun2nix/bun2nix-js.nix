@@ -14,11 +14,11 @@
           src = ../../programs/bun2nix;
 
           cargoLock = {
-            lockFile = "${finalAttrs.src}/Cargo.lock";
+            lockFile = finalAttrs.src + "/Cargo.lock";
           };
 
           bunDeps = final.bun2nix.fetchBunDeps {
-            bunNix = "${finalAttrs.src}/bun.nix";
+            bunNix = finalAttrs.src + "/bun.nix";
           };
 
           nativeBuildInputs = with final; [
