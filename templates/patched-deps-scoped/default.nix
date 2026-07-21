@@ -10,7 +10,7 @@
 let
   src = ./.;
   packageJsonContents = lib.importJSON ./package.json;
-  patchedDependencies = lib.mapAttrs (_: path: "${src}/${path}") (
+  patchedDependencies = lib.mapAttrs (_: path: src + "/${path}") (
     packageJsonContents.patchedDependencies or { }
   );
   patchOverrides = bun2nix.patchedDependenciesToOverrides {

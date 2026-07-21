@@ -6,7 +6,7 @@
       packages.cacheEntryCreator = pkgs.stdenvNoCC.mkDerivation (
         finalAttrs:
         let
-          depsNix = "${finalAttrs.src}/deps.nix";
+          depsNix = finalAttrs.src + "/deps.nix";
         in
         {
           pname = "bun2nix-cache-entry-creator";
