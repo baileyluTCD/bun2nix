@@ -25,7 +25,7 @@ beamPackages.mixRelease {
   bunDeps = bun2nix.fetchBunDeps {
     bunNix = ./assets/bun.nix;
     overrides = {
-      "@tailwindcss/cli@4.1.17" =
+      "@tailwindcss/cli@4.3.3" =
         pkg:
         runCommandLocal "tailwind-cli" { } ''
           mkdir "$out"
