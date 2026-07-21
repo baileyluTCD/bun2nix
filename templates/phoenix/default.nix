@@ -1,5 +1,7 @@
 {
   callPackages,
+  stdenv,
+  lib,
 
   beamPackages,
 
@@ -10,6 +12,14 @@
   tailwindcss_4,
   ...
 }:
+let
+  tailwindNoVersionCheck = tailwindcss_4.overrideAttrs (
+    _:
+    lib.optionalAttrs stdenv.hostPlatform.isDarwin {
+      doInstallCheck = false;
+    }
+  );
+in
 beamPackages.mixRelease {
   pname = "bun2nix_phoenix";
   version = "0.1.0";
@@ -25,7 +35,7 @@ beamPackages.mixRelease {
   bunDeps = bun2nix.fetchBunDeps {
     bunNix = ./assets/bun.nix;
     overrides = {
-      "@tailwindcss/cli@4.1.17" =
+      "@tailwindcss/cli@4.3.3" =
         pkg:
         runCommandLocal "tailwind-cli" { } ''
           mkdir "$out"
@@ -33,7 +43,7 @@ beamPackages.mixRelease {
 
           chmod -R u+w $out
 
-          cp "${tailwindcss_4}/bin/tailwindcss" "$out/dist/index.mjs"
+          cp "${lib.getExe tailwindNoVersionCheck}" "$out/dist/index.mjs"
         '';
     };
   };
@@ -47,13 +57,13 @@ beamPackages.mixRelease {
 
   postBuild = ''
     bun_path="$(mix do \
-      app.config --no-deps-check --no-compile, \
-      eval 'Bun.bin_path() |> IO.puts()')"
+    app.config --no-deps-check --no-compile, \
+    eval 'Bun.bin_path() |> IO.puts()')"
 
     ln -sfv ${bun}/bin/bun "$bun_path"
 
     mix do \
-      app.config --no-deps-check --no-compile, \
-      assets.deploy --no-deps-check
+    app.config --no-deps-check --no-compile, \
+    assets.deploy --no-deps-check
   '';
 }
