@@ -39,7 +39,7 @@
           wasm-pack
           lld
 
-          elixir_1_19
+          beamPackages.elixir_1_20
 
           (lib.optional (!stdenv.isDarwin) moldHook)
         ];

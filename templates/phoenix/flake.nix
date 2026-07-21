@@ -54,7 +54,7 @@
         {
           default = pkgs.mkShellNoCC {
             packages = with pkgs; [
-              elixir_1_19
+              beamPackages.elixir_1_20
               watchman
               bun
 
