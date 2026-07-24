@@ -25,14 +25,14 @@ use wasm_bindgen::prelude::*;
 #[cfg_attr(target_arch = "wasm32", no_mangle)]
 pub fn convert_lockfile_to_nix_expression(contents: String, options: Options) -> Result<String> {
     let packages = build_packages(&contents)?;
-
-    NixExpression::new(packages)?.render_with_options(options)
+    render_packages(packages, options)
 }
 
 /// # Build Packages from a Lockfile
 ///
 /// Parses a bun lockfile and produces the sorted, de-duplicated list of
-/// [`Package`]s it describes.
+/// [`Package`]s it describes. Every npm-registry package carries a manifest
+/// reconstructed from the lockfile's inline metadata.
 pub fn build_packages(contents: &str) -> Result<Vec<Package>> {
     let lockfile = contents.parse::<Lockfile>()?;
 
@@ -76,6 +76,14 @@ pub fn build_packages(contents: &str) -> Result<Vec<Package>> {
     }
 
     Ok(packages)
+}
+
+/// # Render Packages to a Nix Expression
+///
+/// Renders a (possibly manifest-enriched) package list into the final `bun.nix`
+/// text using the supplied [`Options`].
+pub fn render_packages(packages: Vec<Package>, options: Options) -> Result<String> {
+    NixExpression::new(packages)?.render_with_options(options)
 }
 
 /// Collapse `.` and `..` segments lexically (`a/b/../c` → `a/c`).

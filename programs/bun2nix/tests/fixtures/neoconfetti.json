@@ -1,0 +1,44 @@
+{
+  "name": "@neoconfetti/svelte",
+  "dist-tags": {
+    "latest": "2.2.2"
+  },
+  "versions": {
+    "2.2.1": {
+      "name": "@neoconfetti/svelte",
+      "version": "2.2.1",
+      "dependencies": {},
+      "peerDependencies": {
+        "svelte": "^3.0.0 || ^4.0.0 || ^5.0.0"
+      },
+      "peerDependenciesMeta": {
+        "svelte": {
+          "optional": false
+        }
+      },
+      "dist": {
+        "integrity": "sha512-oldversionhash==",
+        "tarball": "https://registry.npmjs.org/@neoconfetti/svelte/-/svelte-2.2.1.tgz"
+      },
+      "hasInstallScript": false
+    },
+    "2.2.2": {
+      "name": "@neoconfetti/svelte",
+      "version": "2.2.2",
+      "dependencies": {},
+      "peerDependencies": {
+        "svelte": "^3.0.0 || ^4.0.0 || ^5.0.0"
+      },
+      "peerDependenciesMeta": {
+        "svelte": {
+          "optional": false
+        }
+      },
+      "dist": {
+        "integrity": "sha512-E7xCFVEEm5Ctnj2udTJy1b9oaTvjz1zi1mYdEtE8rB5BVwq6kHisosDS+zdWN5PMfEMjtbsOV9Cl6tsNSAD1sA==",
+        "tarball": "https://registry.npmjs.org/@neoconfetti/svelte/-/svelte-2.2.2.tgz"
+      },
+      "hasInstallScript": false
+    }
+  }
+}

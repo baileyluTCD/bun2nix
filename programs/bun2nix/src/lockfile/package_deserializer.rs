@@ -1,3 +1,7 @@
+use std::collections::BTreeMap;
+
+use bun2nix_core::manifest::meta::VersionMeta;
+
 use crate::{
     Package,
     error::{Error, Result},
@@ -6,6 +10,101 @@ use crate::{
 
 mod prefetch;
 pub use prefetch::Prefetch;
+
+/// The dependency-graph metadata bun stores inline as element 2 of an npm
+/// lockfile entry (`[id, url, meta, hash]`). Mirrors the per-version fields of
+/// the abbreviated npm registry manifest, which is why it reconstructs the same
+/// `VersionMeta` the network path used to fetch.
+#[derive(serde::Deserialize)]
+struct RawLockMeta {
+    #[serde(default)]
+    dependencies: BTreeMap<String, String>,
+    #[serde(rename = "optionalDependencies", default)]
+    optional_dependencies: BTreeMap<String, String>,
+    #[serde(rename = "peerDependencies", default)]
+    peer_dependencies: BTreeMap<String, String>,
+    /// Already split out by bun (no `peerDependenciesMeta` reconstruction needed).
+    #[serde(rename = "optionalPeers", default)]
+    optional_peers: Vec<String>,
+    #[serde(default)]
+    bin: RawBin,
+    #[serde(default)]
+    os: RawStringList,
+    #[serde(default)]
+    cpu: RawStringList,
+}
+
+/// npm `bin` can be a bare string or a `{ name: path }` object.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum RawBin {
+    Str(String),
+    Map(BTreeMap<String, String>),
+}
+
+impl Default for RawBin {
+    fn default() -> Self {
+        RawBin::Map(BTreeMap::new())
+    }
+}
+
+/// `os`/`cpu` in bun.lock metadata can be a bare string (bun collapses
+/// single-element lists, e.g. `"cpu": "x64"` or `"os": "none"`) or an array.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum RawStringList {
+    Str(String),
+    List(Vec<String>),
+}
+
+impl Default for RawStringList {
+    fn default() -> Self {
+        RawStringList::List(Vec::new())
+    }
+}
+
+impl From<RawStringList> for Vec<String> {
+    fn from(v: RawStringList) -> Self {
+        match v {
+            RawStringList::Str(s) => vec![s],
+            RawStringList::List(l) => l,
+        }
+    }
+}
+
+impl RawLockMeta {
+    /// Build the registry-shaped `VersionMeta` for `<name>@<version>` using the
+    /// already-derived `tarball_url`. `integrity` is left empty (the Nix layer
+    /// fills it from the entry hash) and `has_install_script` is `false` (the
+    /// lockfile carries no install-script signal).
+    fn into_version_meta(self, ident: &str, tarball_url: &str) -> Result<VersionMeta> {
+        let (name, version) = ident
+            .rsplit_once('@')
+            .ok_or(Error::NoAtInPackageIdentifier)?;
+
+        // For a bare-string bin, npm/bun key it by the package-name basename
+        // (the last path segment, dropping any `@scope/`).
+        let basename = name.rsplit('/').next().unwrap_or(name);
+        let bin = match self.bin {
+            RawBin::Str(path) => [(basename.to_string(), path)].into_iter().collect(),
+            RawBin::Map(map) => map,
+        };
+
+        Ok(VersionMeta {
+            version: version.to_string(),
+            tarball_url: tarball_url.to_string(),
+            integrity: String::new(),
+            dependencies: self.dependencies,
+            peer_dependencies: self.peer_dependencies,
+            optional_dependencies: self.optional_dependencies,
+            optional_peers: self.optional_peers,
+            bin,
+            os: self.os.into(),
+            cpu: self.cpu.into(),
+            has_install_script: false,
+        })
+    }
+}
 
 type Values = Vec<serde_json::Value>;
 
@@ -78,7 +177,7 @@ impl PackageDeserializer {
         // [identifier, tarball_url, metadata, hash]
         // - identifier: "name@version"
         // - tarball_url: "" for default registry, or exact URL to tarball
-        // - metadata: object with dependencies, bin, etc.
+        // - metadata: object with dependencies, peerDependencies, bin, etc.
         // - hash: integrity hash (sha512-...)
 
         let npm_identifier_raw = swap_remove_value(&mut self.values, 0);
@@ -87,8 +186,6 @@ impl PackageDeserializer {
         let hash = swap_remove_value(&mut self.values, 0);
         // After swap_remove(0): [meta, tarball_url]
 
-        // Get the tarball URL from what's now at index 1
-        // (originally at index 1, but the metadata swapped in at index 0)
         let tarball_url = self
             .values
             .get(1)
@@ -102,7 +199,22 @@ impl PackageDeserializer {
 
         let fetcher = Fetcher::new_npm_package(&npm_identifier_raw, hash, tarball_url)?;
 
-        Ok(Package::new(npm_identifier_raw, fetcher))
+        // Default-registry npm entries (`name: None`) carry an offline manifest
+        // reconstructed from the inline metadata object; non-default-registry
+        // entries are out of scope (v1) and get none. The metadata object is now
+        // at index 0 (`[meta, tarball_url]`).
+        let manifest = if let Fetcher::FetchUrl { name: None, url, .. } = &fetcher {
+            let raw: RawLockMeta = serde_json::from_value(self.values.swap_remove(0))?;
+            Some(raw.into_version_meta(&npm_identifier_raw, url)?)
+        } else {
+            None
+        };
+
+        let package = Package::new(npm_identifier_raw, fetcher);
+        Ok(match manifest {
+            Some(m) => package.with_manifest(m),
+            None => package,
+        })
     }
 
     /// # Deserialize a Github Package
@@ -409,5 +521,114 @@ mod tests {
                 pkg.fetcher
             );
         }
+    }
+
+    #[test]
+    fn npm_entry_reconstructs_manifest_from_lockfile_meta() {
+        let values = vec![
+            json!("react-dom@19.2.7"),
+            json!(""),
+            json!({
+                "dependencies": { "scheduler": "^0.27.0" },
+                "peerDependencies": { "react": "^19.2.7" }
+            }),
+            json!(SHA),
+        ];
+
+        let pkg = PackageDeserializer::deserialize_package("react-dom".into(), values).unwrap();
+        let m = pkg
+            .manifest
+            .expect("a default-registry npm entry must carry a manifest");
+
+        assert_eq!(m.version, "19.2.7");
+        assert_eq!(
+            m.tarball_url,
+            "https://registry.npmjs.org/react-dom/-/react-dom-19.2.7.tgz"
+        );
+        assert!(m.integrity.is_empty(), "integrity is reused from the entry hash");
+        assert_eq!(m.dependencies.get("scheduler"), Some(&"^0.27.0".to_string()));
+        assert_eq!(m.peer_dependencies.get("react"), Some(&"^19.2.7".to_string()));
+        assert!(m.optional_dependencies.is_empty());
+        assert!(m.optional_peers.is_empty());
+        assert!(m.bin.is_empty());
+        assert!(m.os.is_empty());
+        assert!(m.cpu.is_empty());
+        assert!(!m.has_install_script);
+    }
+
+    #[test]
+    fn optional_peers_and_object_bin_pass_through() {
+        let values = vec![
+            json!("next@16.0.3"),
+            json!(""),
+            json!({
+                "peerDependencies": { "react": "^19.0.0", "sass": "^1.3.0" },
+                "optionalPeers": ["sass"],
+                "bin": { "next": "dist/bin/next" }
+            }),
+            json!(SHA),
+        ];
+
+        let pkg = PackageDeserializer::deserialize_package("next".into(), values).unwrap();
+        let m = pkg.manifest.unwrap();
+
+        assert_eq!(m.optional_peers, vec!["sass".to_string()]);
+        assert_eq!(m.bin.get("next"), Some(&"dist/bin/next".to_string()));
+    }
+
+    // bun collapses single-element os/cpu lists to bare strings in bun.lock
+    // (e.g. platform packages like @cloudflare/workerd-darwin-64).
+    #[test]
+    fn string_form_os_cpu_parse_as_single_element_lists() {
+        let values = vec![
+            json!("@cloudflare/workerd-darwin-64@1.20251118.0"),
+            json!(""),
+            json!({ "os": "darwin", "cpu": "x64" }),
+            json!(SHA),
+        ];
+
+        let pkg = PackageDeserializer::deserialize_package(
+            "@cloudflare/workerd-darwin-64".into(),
+            values,
+        )
+        .unwrap();
+        let m = pkg.manifest.unwrap();
+
+        assert_eq!(m.os, vec!["darwin".to_string()]);
+        assert_eq!(m.cpu, vec!["x64".to_string()]);
+    }
+
+    #[test]
+    fn bare_string_bin_normalizes_to_scoped_basename() {
+        let values = vec![
+            json!("@neoconfetti/svelte@2.2.2"),
+            json!(""),
+            json!({ "bin": "./cli.js" }),
+            json!(SHA),
+        ];
+
+        let pkg =
+            PackageDeserializer::deserialize_package("@neoconfetti/svelte".into(), values).unwrap();
+        let m = pkg.manifest.unwrap();
+
+        // Bare-string bin maps to { <name-basename>: <path> }.
+        assert_eq!(m.bin.get("svelte"), Some(&"./cli.js".to_string()));
+        assert_eq!(
+            m.tarball_url,
+            "https://registry.npmjs.org/@neoconfetti/svelte/-/svelte-2.2.2.tgz"
+        );
+    }
+
+    #[test]
+    fn non_default_registry_entry_has_no_manifest() {
+        let values = vec![
+            json!("foo@1.0.0"),
+            json!("https://npm.example.com/foo/-/foo-1.0.0.tgz"),
+            json!({ "dependencies": { "bar": "^1.0.0" } }),
+            json!(SHA),
+        ];
+
+        let pkg = PackageDeserializer::deserialize_package("foo".into(), values).unwrap();
+        assert!(pkg.manifest.is_none(), "non-default registries are out of scope in v1");
     }
 }

@@ -3,7 +3,7 @@
 
 #![warn(missing_docs)]
 
-use bun2nix::{Options, Result, convert_lockfile_to_nix_expression};
+use bun2nix::{Options, Result, build_packages, render_packages};
 use log::error;
 
 use std::{
@@ -52,8 +52,10 @@ fn run() -> Result<()> {
 
     let lockfile = fs::read_to_string(&cli.lock_file)?;
 
-    let nix = convert_lockfile_to_nix_expression(
-        lockfile,
+    let packages = build_packages(&lockfile)?;
+
+    let nix = render_packages(
+        packages,
         Options {
             copy_prefix: cli.copy_prefix,
         },
@@ -68,3 +70,4 @@ fn run() -> Result<()> {
 
     Ok(())
 }
+
