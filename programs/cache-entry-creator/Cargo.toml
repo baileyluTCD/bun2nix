@@ -1,0 +1,14 @@
+[[bin]]
+name = "cache_entry_creator"
+path = "src/main.rs"
+
+[dependencies]
+bun2nix-core = {path = "../bun2nix-core"}
+clap = {version = "4.5.31", features = ["derive"]}
+serde_json.workspace = true
+
+[package]
+name = "cache-entry-creator"
+edition.workspace = true
+license.workspace = true
+version.workspace = true

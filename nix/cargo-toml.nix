@@ -8,5 +8,15 @@ in
     type = types.raw;
   };
 
-  config.cargoTOML = builtins.fromTOML (builtins.readFile "${self}/programs/bun2nix/Cargo.toml");
+  config.cargoTOML =
+    let
+      crate = builtins.fromTOML (builtins.readFile "${self}/programs/bun2nix/Cargo.toml");
+      ws = builtins.fromTOML (builtins.readFile "${self}/programs/Cargo.toml");
+    in
+    crate
+    // {
+      package = crate.package // {
+        inherit (ws.workspace.package) version;
+      };
+    };
 }
