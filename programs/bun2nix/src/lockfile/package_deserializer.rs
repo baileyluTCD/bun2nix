@@ -26,16 +26,41 @@ impl PackageDeserializer {
     /// # Deserialize package
     ///
     /// Deserialize a given package from it's lockfile representation
+    ///
+    /// Entries are dispatched on the identifier's resolution (the part after
+    /// the package name), not on tuple arity: bun emits github entries with
+    /// an integrity hash (arity 4) and remote/vendored tarball entries with
+    /// inline metadata (arity 3), so arity alone cannot tell entry kinds
+    /// apart.
     pub fn deserialize_package(name: String, values: Values) -> Result<Package> {
         let arity = values.len();
         let deserializer = Self { name, values };
 
-        match arity {
-            1 => deserializer.deserialize_workspace_package(),
-            2 => deserializer.deserialize_tarball_or_file_package(),
-            3 => deserializer.deserialize_tarball_git_or_github_package(),
-            4 => deserializer.deserialize_npm_package(),
-            x => Err(Error::UnexpectedPackageEntryLength(x)),
+        if arity == 1 {
+            return deserializer.deserialize_workspace_package();
+        }
+        if !(2..=4).contains(&arity) {
+            return Err(Error::UnexpectedPackageEntryLength(arity));
+        }
+
+        let resolution = deserializer
+            .values
+            .first()
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+            .and_then(drain_package_specifier)
+            .ok_or(Error::NoAtInPackageIdentifier)?;
+
+        if resolution.starts_with("github:") {
+            Self::deserialize_github_package(resolution)
+        } else if resolution.starts_with("git+") {
+            Self::deserialize_git_package(resolution)
+        } else if resolution.starts_with("http://") || resolution.starts_with("https://") {
+            Self::deserialize_tarball_package(resolution)
+        } else if arity == 4 {
+            deserializer.deserialize_npm_package()
+        } else {
+            Self::deserialize_file_package(deserializer.name, resolution)
         }
     }
 
@@ -80,34 +105,10 @@ impl PackageDeserializer {
         Ok(Package::new(npm_identifier_raw, fetcher))
     }
 
-    /// # Deserialize a Tarball, Git or Github Package
-    ///
-    /// Deserialize a tarball, git or github package from it's bun
-    /// lockfile representation
-    ///
-    /// These are grouped together as all three lockfile
-    /// representations are a tuple of arity 3, hence the
-    /// specifier prefix decides between them - `http` is a
-    /// tarball (bun records an integrity hash for these), `github:`
-    /// is a github package, and anything else is a git package
-    pub fn deserialize_tarball_git_or_github_package(mut self) -> Result<Package> {
-        let id = swap_remove_value(&mut self.values, 0);
-        let specifier = drain_package_specifier(id).ok_or(Error::NoAtInPackageIdentifier)?;
-
-        if specifier.starts_with("http") {
-            Self::deserialize_tarball_package(specifier)
-        } else if specifier.starts_with("github:") {
-            Self::deserialize_github_package(specifier)
-        } else {
-            Self::deserialize_git_package(specifier)
-        }
-    }
-
     /// # Deserialize a Github Package
     ///
-    /// Deserialize a github package from it's bun lockfile representation
-    ///
-    /// This is found in the source as a tuple of arity 3
+    /// Deserialize a github package from its `github:owner/repo#rev`
+    /// resolution
     pub fn deserialize_github_package(id: String) -> Result<Package> {
         let (url, rev) = split_once_owned(id, '#').ok_or(Error::MissingGitRef)?;
 
@@ -131,9 +132,7 @@ impl PackageDeserializer {
 
     /// # Deserialize a Git Package
     ///
-    /// Deserialize a git package from it's bun lockfile representation
-    ///
-    /// This is found in the source as a tuple of arity 3
+    /// Deserialize a git package from its `git+<url>#<rev>` resolution
     pub fn deserialize_git_package(id: String) -> Result<Package> {
         let git_url = drop_prefix(id, "git+");
         let (url, rev) = split_once_owned(git_url, '#').ok_or(Error::MissingGitRef)?;
@@ -150,26 +149,6 @@ impl PackageDeserializer {
         };
 
         Ok(Package::new(id_with_rev, fetcher))
-    }
-
-    /// # Deserialize a tarball or file package
-    ///
-    /// Deserialize a tarball or file package from it's bun
-    /// lockfile representation
-    ///
-    /// These are grouped together as both lockfile
-    /// representations are a tupe of arity 2, hence
-    /// paths starting with `http` are considered
-    /// tarballs
-    pub fn deserialize_tarball_or_file_package(mut self) -> Result<Package> {
-        let id = swap_remove_value(&mut self.values, 0);
-        let path = drain_package_specifier(id).ok_or(Error::NoAtInPackageIdentifier)?;
-
-        if path.starts_with("http") {
-            Self::deserialize_tarball_package(path)
-        } else {
-            Self::deserialize_file_package(self.name, path)
-        }
     }
 
     /// # Deserialize a file package
@@ -191,11 +170,13 @@ impl PackageDeserializer {
             "File path can never contain http, because then it would be a tarball"
         );
 
-        // Strip prefix: explicit "file:" or implicit "./" (Bun strips file: for local tarballs)
+        // Strip prefix: explicit "file:" or implicit "./" (Bun strips file: for
+        // local tarballs).  Vendored tarballs appear as bare relative paths
+        // (e.g. "vendor/pkg-1.0.0.tgz") with no prefix at all.
         let path = path
             .strip_prefix("file:")
             .or_else(|| path.strip_prefix("./"))
-            .ok_or(Error::MissingFileSpecifier)?;
+            .unwrap_or(&path);
 
         Ok(Package::new(
             name,
@@ -363,4 +344,70 @@ pub fn drop_prefix(mut input: String, prefix: &str) -> String {
     }
 
     input
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const SHA: &str = "sha512-t0BRVXvbiE/o20Hfw669rLbMCDWtYZLvmJigy2f0MxsXF+71pxhR3xOkspmsO8h3ZlNzyibAmtCa3l4lYKk6gQ==";
+
+    // A plain npm entry (arity 4, bare version resolution) still routes to the
+    // npm deserializer.
+    #[test]
+    fn npm_entry_dispatches_to_npm_package() {
+        let values = vec![
+            json!("react-dom@19.2.7"),
+            json!(""),
+            json!({ "dependencies": { "scheduler": "^0.27.0" } }),
+            json!(SHA),
+        ];
+
+        let pkg = PackageDeserializer::deserialize_package("react-dom".into(), values).unwrap();
+        assert!(
+            matches!(pkg.fetcher, Fetcher::FetchUrl { ref url, .. }
+                if url == "https://registry.npmjs.org/react-dom/-/react-dom-19.2.7.tgz"),
+            "expected FetchUrl, got {:?}",
+            pkg.fetcher
+        );
+    }
+
+    // Vendored tarballs are arity-3 entries whose resolution is a bare
+    // relative path: [id, meta, integrity].
+    #[test]
+    fn vendored_tarball_dispatches_to_file_package() {
+        let values = vec![
+            json!("@opencode-ai/client@vendor/opencode-ai-client-1.17.13.tgz"),
+            json!({}),
+            json!(SHA),
+        ];
+
+        let pkg = PackageDeserializer::deserialize_package(
+            "@opencode-ai/app/@opencode-ai/client".into(),
+            values,
+        )
+        .unwrap();
+
+        assert!(
+            matches!(pkg.fetcher, Fetcher::CopyToStore { ref path }
+                if path == "vendor/opencode-ai-client-1.17.13.tgz"),
+            "expected CopyToStore, got {:?}",
+            pkg.fetcher
+        );
+    }
+
+    // file: and ./ prefixes are still stripped from file-package paths.
+    #[test]
+    fn prefixed_file_paths_are_stripped() {
+        for id in ["local-pkg@file:local/pkg.tgz", "local-pkg@./local/pkg.tgz"] {
+            let values = vec![json!(id), json!(SHA)];
+            let pkg = PackageDeserializer::deserialize_package("local-pkg".into(), values).unwrap();
+            assert!(
+                matches!(pkg.fetcher, Fetcher::CopyToStore { ref path } if path == "local/pkg.tgz"),
+                "expected stripped CopyToStore for {id}, got {:?}",
+                pkg.fetcher
+            );
+        }
+    }
 }
