@@ -32,15 +32,44 @@ pub const DEFAULT_URL_HASH: u64 = 0x9c1e_4d1f_1eff_5fcd;
 /// the `.npm` header right after `url_hash`.
 pub const DEFAULT_REGISTRY_HREF_LEN: u64 = 26;
 
+/// Strip trailing `/` and `\` from a registry href while more than one byte
+/// remains — the bytes bun hashes and measures for the `.npm` header.
+pub fn without_trailing_slash(href: &str) -> &str {
+    let bytes = href.as_bytes();
+    let mut end = href.len();
+    while end > 1 && matches!(bytes[end - 1], b'/' | b'\\') {
+        end -= 1;
+    }
+    &href[..end]
+}
+
+/// wyhash11 of a registry href without its trailing slash — the `url_hash`
+/// stored in the `.npm` header and in non-default manifest filenames.
+pub fn url_hash(href: &str) -> u64 {
+    wyhash11(0, without_trailing_slash(href).as_bytes())
+}
+
+/// Registry href length (without trailing slash) stored in the `.npm` header
+/// right after `url_hash`.
+pub fn registry_href_len(href: &str) -> u64 {
+    without_trailing_slash(href).len() as u64
+}
+
 /// wyhash11 of the default registry URL **without** the trailing slash — matches
 /// bun's `DEFAULT_URL_HASH`.
 pub fn default_url_hash() -> u64 {
-    wyhash11(0, DEFAULT_REGISTRY_URL.trim_end_matches('/').as_bytes())
+    url_hash(DEFAULT_REGISTRY_URL)
 }
 
-/// `.npm` filename for a package on the default registry (`<wyhash11(name)>.npm`).
-pub fn manifest_file_name(name: &str) -> String {
-    format!("{:016x}.npm", wyhash11(0, name.as_bytes()))
+/// `.npm` filename for a package: `<hex16(wyhash11(name))>.npm` on the
+/// default registry, `<hex16(wyhash11(name))>-<hex16(url_hash)>.npm` for a
+/// non-default registry.
+pub fn manifest_file_name(name: &str, registry: Option<&str>) -> String {
+    let file_id = wyhash11(0, name.as_bytes());
+    match registry {
+        None => format!("{file_id:016x}.npm"),
+        Some(href) => format!("{file_id:016x}-{:016x}.npm", url_hash(href)),
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────

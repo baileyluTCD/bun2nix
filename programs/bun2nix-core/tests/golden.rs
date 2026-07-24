@@ -17,7 +17,7 @@ fn default_url_hash_matches_header_constant() {
 /// `@neoconfetti/svelte`'s manifest filename is `wyhash11(0, name)` hex.
 #[test]
 fn neoconfetti_filename() {
-    let f = manifest::manifest_file_name("@neoconfetti/svelte");
+    let f = manifest::manifest_file_name("@neoconfetti/svelte", None);
     eprintln!("@neoconfetti/svelte -> {f}");
     assert!(f.ends_with(".npm"));
 }
@@ -291,4 +291,34 @@ fn emit_neoconfetti_npm() {
     .unwrap();
     std::fs::write(&path, &out).unwrap();
     eprintln!("wrote {} bytes to {path}", out.len());
+}
+
+/// Golden values for a non-default registry (registry.npmmirror.com),
+/// pinned against the vendored Wyhash11.
+#[test]
+fn npmmirror_url_hash_and_filename() {
+    let href = "https://registry.npmmirror.com";
+    assert_eq!(manifest::url_hash(href), 0x02200d3777602379);
+    // Trailing slash is stripped before hashing.
+    assert_eq!(manifest::url_hash("https://registry.npmmirror.com/"), 0x02200d3777602379);
+    assert_eq!(manifest::registry_href_len(href), 30);
+    assert_eq!(
+        manifest::manifest_file_name("react", Some(href)),
+        "94c49019ded8e790-02200d3777602379.npm"
+    );
+    assert_eq!(manifest::manifest_file_name("react", None), "94c49019ded8e790.npm");
+}
+
+/// The generalized hash must reproduce bun's DEFAULT_URL_HASH for the
+/// default registry URL (which carries a trailing slash).
+#[test]
+fn generalized_url_hash_matches_default_constant() {
+    assert_eq!(
+        manifest::url_hash(manifest::DEFAULT_REGISTRY_URL),
+        manifest::DEFAULT_URL_HASH
+    );
+    assert_eq!(
+        manifest::registry_href_len(manifest::DEFAULT_REGISTRY_URL),
+        manifest::DEFAULT_REGISTRY_HREF_LEN
+    );
 }

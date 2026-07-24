@@ -28,12 +28,19 @@ pub struct Package {
 
     /// Optional registry manifest metadata for this package.
     ///
-    /// Only default-registry npm packages ever carry `Some`; git, GitHub,
-    /// tarball, workspace and non-default-registry packages always stay `None`.
-    /// When present, the rendered `bun.nix` entry gains a `manifest = { ... }`
-    /// attribute and its `url` is taken from the manifest's `tarball_url`.
+    /// Every npm-registry package carries `Some`; git, GitHub, tarball,
+    /// workspace and file packages stay `None`. When present, the rendered
+    /// `bun.nix` entry gains a `manifest = { ... }` attribute and its `url`
+    /// is taken from the manifest's `tarball_url`.
     #[serde(skip)]
     pub manifest: Option<VersionMeta>,
+
+    /// Registry href for this package's manifest cache key, normalized and
+    /// without trailing slash. `None` ⇒ the default npmjs registry. Resolved
+    /// from project-local bun config, never from the tarball URL (a registry
+    /// may CDN-host tarballs on a different host).
+    #[serde(skip)]
+    pub registry: Option<String>,
 }
 
 impl Package {
@@ -46,6 +53,7 @@ impl Package {
             name,
             fetcher,
             manifest: None,
+            registry: None,
         }
     }
 
@@ -81,7 +89,7 @@ impl Package {
                 // Indent so the block aligns under the entry (entry is at 2
                 // spaces, the fetcher's closing brace at 2 spaces).
                 let _ = write!(out, " // {{\n    manifest = ");
-                manifest_nix::render_version_meta(&mut out, meta, 4);
+                manifest_nix::render_version_meta(&mut out, meta, self.registry.as_deref(), 4);
                 out.push_str(";\n  }");
                 out
             }

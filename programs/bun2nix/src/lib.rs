@@ -9,6 +9,7 @@ pub mod nix_expression;
 pub mod options;
 pub mod package;
 
+pub use bun2nix_core::config::RegistryConfig;
 pub use error::{Error, Result};
 pub use lockfile::Lockfile;
 use nix_expression::NixExpression;
@@ -20,11 +21,20 @@ use wasm_bindgen::prelude::*;
 
 /// # Convert Bun Lockfile to a Nix expression
 ///
-/// Takes a string input of the contents of a bun lockfile and converts it into a ready to use Nix expression which fetches the packages
+/// Takes the contents of a bun lockfile — plus optional project-local
+/// `bunfig.toml` / `.npmrc` contents for non-default-registry resolution —
+/// and converts it into a ready to use Nix expression which fetches the
+/// packages.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 #[cfg_attr(target_arch = "wasm32", no_mangle)]
-pub fn convert_lockfile_to_nix_expression(contents: String, options: Options) -> Result<String> {
-    let packages = build_packages(&contents)?;
+pub fn convert_lockfile_to_nix_expression(
+    contents: String,
+    options: Options,
+    bunfig: Option<String>,
+    npmrc: Option<String>,
+) -> Result<String> {
+    let registry_config = RegistryConfig::parse(bunfig.as_deref(), npmrc.as_deref())?;
+    let packages = build_packages(&contents, &registry_config)?;
     render_packages(packages, options)
 }
 
@@ -32,8 +42,9 @@ pub fn convert_lockfile_to_nix_expression(contents: String, options: Options) ->
 ///
 /// Parses a bun lockfile and produces the sorted, de-duplicated list of
 /// [`Package`]s it describes. Every npm-registry package carries a manifest
-/// reconstructed from the lockfile's inline metadata.
-pub fn build_packages(contents: &str) -> Result<Vec<Package>> {
+/// reconstructed from the lockfile's inline metadata, and (for scopes/packages
+/// mapped to a non-default registry by `registry_config`) a `registry` href.
+pub fn build_packages(contents: &str, registry_config: &RegistryConfig) -> Result<Vec<Package>> {
     let lockfile = contents.parse::<Lockfile>()?;
 
     if lockfile.lockfile_version != 1 {
@@ -73,6 +84,17 @@ pub fn build_packages(contents: &str) -> Result<Vec<Package>> {
                 *path = normalize_path(&format!("{dir}/{path}"));
             }
         }
+
+        if package.manifest.is_none() {
+            continue;
+        }
+        let name = package
+            .name
+            .rsplit_once('@')
+            .map_or(package.name.as_str(), |(name, _version)| name);
+        package.registry = registry_config
+            .scope_for_package_name(name)
+            .map(str::to_string);
     }
 
     Ok(packages)
@@ -109,6 +131,35 @@ fn normalize_path(path: &str) -> String {
 mod tests {
     use super::*;
 
+    const LOCK: &str = r#"{
+  "lockfileVersion": 1,
+  "workspaces": { "": { "name": "t" } },
+  "packages": {
+    "react": ["react@19.2.7", "https://registry.npmmirror.com/react/-/react-19.2.7.tgz", {}, "sha512-AAAA"],
+  }
+}"#;
+
+    #[test]
+    fn build_packages_sets_registry_from_config() {
+        let cfg = RegistryConfig::parse(
+            Some("[install]\nregistry = \"https://registry.npmmirror.com\"\n"),
+            None,
+        )
+        .unwrap();
+        let pkgs = build_packages(LOCK, &cfg).unwrap();
+        assert_eq!(
+            pkgs[0].registry.as_deref(),
+            Some("https://registry.npmmirror.com")
+        );
+        assert!(pkgs[0].manifest.is_some());
+    }
+
+    #[test]
+    fn build_packages_default_config_sets_no_registry() {
+        let pkgs = build_packages(LOCK, &RegistryConfig::default()).unwrap();
+        assert_eq!(pkgs[0].registry, None);
+    }
+
     // A vendored tarball nested under a workspace ("<ws-name>/<pkg>") is
     // recorded relative to the workspace dir; bun.nix needs it root-relative.
     #[test]
@@ -127,7 +178,7 @@ mod tests {
     "@oc/ui/@oc/client": ["@oc/client@../app/vendor/client-1.0.0.tgz", {}, "sha512-AAAA"],
   }
 }"#;
-        let pkgs = build_packages(lock).unwrap();
+        let pkgs = build_packages(lock, &RegistryConfig::default()).unwrap();
         let path_of = |name: &str| {
             let p = pkgs.iter().find(|p| p.name == name).unwrap();
             match &p.fetcher {

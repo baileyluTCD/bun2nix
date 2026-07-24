@@ -73,16 +73,31 @@ fn render_str_list(out: &mut String, list: &[String]) {
 
 /// Render a [`VersionMeta`] as a Nix attribute set at the given indentation
 /// (the column at which the opening `{` sits, used to align nested entries).
+/// `registry` (when `Some`) is emitted first as a `registry` attr — the
+/// non-default registry href keying this entry's `.npm` manifest.
 ///
 /// Note: the `integrity` field is deliberately **not** emitted — it is rebuilt
 /// downstream from the entry `hash`.
-pub fn render_version_meta(out: &mut String, meta: &VersionMeta, indent: usize) {
+pub fn render_version_meta(
+    out: &mut String,
+    meta: &VersionMeta,
+    registry: Option<&str>,
+    indent: usize,
+) {
     let pad = " ".repeat(indent);
     let inner = " ".repeat(indent + 2);
 
     out.push_str("{\n");
 
-    let _ = writeln!(out, "{inner}tarballUrl = {};", nix_string(&meta.tarball_url));
+    if let Some(href) = registry {
+        let _ = writeln!(out, "{inner}registry = {};", nix_string(href));
+    }
+
+    let _ = writeln!(
+        out,
+        "{inner}tarballUrl = {};",
+        nix_string(&meta.tarball_url)
+    );
 
     let _ = write!(out, "{inner}dependencies = ");
     render_str_map(out, &meta.dependencies, indent + 2);
@@ -112,7 +127,11 @@ pub fn render_version_meta(out: &mut String, meta: &VersionMeta, indent: usize) 
     render_str_list(out, &meta.cpu);
     out.push_str(";\n");
 
-    let _ = writeln!(out, "{inner}hasInstallScript = {};", meta.has_install_script);
+    let _ = writeln!(
+        out,
+        "{inner}hasInstallScript = {};",
+        meta.has_install_script
+    );
 
     let _ = write!(out, "{pad}}}");
 }

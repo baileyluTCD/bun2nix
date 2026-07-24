@@ -199,11 +199,11 @@ impl PackageDeserializer {
 
         let fetcher = Fetcher::new_npm_package(&npm_identifier_raw, hash, tarball_url)?;
 
-        // Default-registry npm entries (`name: None`) carry an offline manifest
-        // reconstructed from the inline metadata object; non-default-registry
-        // entries are out of scope (v1) and get none. The metadata object is now
-        // at index 0 (`[meta, tarball_url]`).
-        let manifest = if let Fetcher::FetchUrl { name: None, url, .. } = &fetcher {
+        // Every npm entry carries an offline manifest reconstructed from the
+        // inline metadata object (index 0 after the swaps: `[meta, tarball_url]`).
+        // The tarball URL is the fetcher's: inferred for the default registry,
+        // verbatim from the lockfile otherwise.
+        let manifest = if let Fetcher::FetchUrl { url, .. } = &fetcher {
             let raw: RawLockMeta = serde_json::from_value(self.values.swap_remove(0))?;
             Some(raw.into_version_meta(&npm_identifier_raw, url)?)
         } else {
@@ -545,9 +545,18 @@ mod tests {
             m.tarball_url,
             "https://registry.npmjs.org/react-dom/-/react-dom-19.2.7.tgz"
         );
-        assert!(m.integrity.is_empty(), "integrity is reused from the entry hash");
-        assert_eq!(m.dependencies.get("scheduler"), Some(&"^0.27.0".to_string()));
-        assert_eq!(m.peer_dependencies.get("react"), Some(&"^19.2.7".to_string()));
+        assert!(
+            m.integrity.is_empty(),
+            "integrity is reused from the entry hash"
+        );
+        assert_eq!(
+            m.dependencies.get("scheduler"),
+            Some(&"^0.27.0".to_string())
+        );
+        assert_eq!(
+            m.peer_dependencies.get("react"),
+            Some(&"^19.2.7".to_string())
+        );
         assert!(m.optional_dependencies.is_empty());
         assert!(m.optional_peers.is_empty());
         assert!(m.bin.is_empty());
@@ -620,7 +629,7 @@ mod tests {
     }
 
     #[test]
-    fn non_default_registry_entry_has_no_manifest() {
+    fn non_default_registry_entry_reconstructs_manifest_with_lockfile_url() {
         let values = vec![
             json!("foo@1.0.0"),
             json!("https://npm.example.com/foo/-/foo-1.0.0.tgz"),
@@ -629,6 +638,12 @@ mod tests {
         ];
 
         let pkg = PackageDeserializer::deserialize_package("foo".into(), values).unwrap();
-        assert!(pkg.manifest.is_none(), "non-default registries are out of scope in v1");
+        let m = pkg
+            .manifest
+            .expect("non-default-registry npm entries carry a manifest too");
+
+        // The explicit lockfile URL is used verbatim as the tarball URL.
+        assert_eq!(m.tarball_url, "https://npm.example.com/foo/-/foo-1.0.0.tgz");
+        assert_eq!(m.dependencies.get("bar"), Some(&"^1.0.0".to_string()));
     }
 }

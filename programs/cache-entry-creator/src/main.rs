@@ -7,20 +7,18 @@
 
 use std::{
     collections::BTreeMap,
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
 };
 
 use bun2nix_core::{
     cache_name::cached_folder_print_basename,
     manifest::{
-        build::build_manifest,
-        default_url_hash,
-        manifest_file_name,
-        meta::{EntryMeta, PackageMeta, VersionMeta},
-        serialize,
         DEFAULT_REGISTRY_HREF_LEN,
+        build::build_manifest,
+        default_url_hash, manifest_file_name,
+        meta::{EntryMeta, PackageMeta, VersionMeta},
+        registry_href_len, serialize, url_hash,
     },
 };
 use clap::{Parser, Subcommand};
@@ -63,8 +61,9 @@ enum Commands {
     /// Write bun `.npm` manifest cache files for a set of package entries.
     ///
     /// Reads `--meta` as a `Vec<EntryMeta>` JSON, groups entries by package
-    /// name, builds a manifest per package, and writes `<wyhash(name)>.npm`
-    /// files into `--out`.
+    /// name and registry, builds a manifest per group, and writes
+    /// `<wyhash(name)>.npm` (default registry) or
+    /// `<wyhash(name)>-<wyhash(registry)>.npm` files into `--out`.
     Manifest {
         /// The directory to write `.npm` files into (created if absent).
         #[arg(long)]
@@ -80,7 +79,12 @@ enum Commands {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Symlink { out, name, package, registry } => {
+        Commands::Symlink {
+            out,
+            name,
+            package,
+            registry,
+        } => {
             run_symlink(&out, &name, &package, registry.as_deref())?;
         }
         Commands::Manifest { out, meta } => {
@@ -99,12 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// `package`.
 ///
 /// Mirrors `PkgLinker::create_cache_entry` from the Zig implementation.
-fn run_symlink(
-    out: &Path,
-    name: &str,
-    package: &Path,
-    registry: Option<&str>,
-) -> io::Result<()> {
+fn run_symlink(out: &Path, name: &str, package: &Path, registry: Option<&str>) -> io::Result<()> {
     eprintln!("Creating entry for `{}`...", name);
 
     let basename = cached_folder_print_basename(name, registry);
@@ -138,18 +137,18 @@ fn run_symlink(
 ///
 /// Reads `meta_path` as `Vec<EntryMeta>`, sets each entry's
 /// `manifest.integrity` from its `hash` field (the SRI is reused as npm
-/// integrity; `build_manifest` decodes it), groups by package name, builds a
-/// [`PackageManifest`], and serializes it to
-/// `<out>/<manifest_file_name(name)>`.
-///
-/// v1 scope: entries with `registry == Some(_)` are skipped with a diagnostic.
+/// integrity; `build_manifest` decodes it), groups by `(package name,
+/// registry)`, builds a [`PackageManifest`] per group, and serializes it to
+/// `<out>/<manifest_file_name(name, registry)>` with the registry's
+/// `url_hash`/`href_len` in the header.
 fn run_manifest(out: &Path, meta_path: &Path) -> io::Result<()> {
     let content = fs::read_to_string(meta_path)?;
-    let mut entries: Vec<EntryMeta> =
-        serde_json::from_str(&content).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let mut entries: Vec<EntryMeta> = serde_json::from_str(&content)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-    // Group entries by package name, populating integrity from the Nix hash.
-    let mut by_name: BTreeMap<String, Vec<VersionMeta>> = BTreeMap::new();
+    // Group entries by (package name, registry href); each group becomes one
+    // `.npm` file keyed by that registry's url_hash.
+    let mut groups: BTreeMap<(String, Option<String>), Vec<VersionMeta>> = BTreeMap::new();
 
     for entry in &mut entries {
         // Re-use the SRI hash string as the npm integrity field.
@@ -163,31 +162,28 @@ fn run_manifest(out: &Path, meta_path: &Path) -> io::Result<()> {
             None => entry.name_version.clone(),
         };
 
-        // v1: skip non-default registry entries. Non-default-registry packages do not
-        // receive a `manifest` attr in `bun.nix` (only default-registry entries are
-        // enriched), so in v1 this branch is effectively unreachable; it exists as a
-        // defensive, documented limitation. Non-default-registry manifest support is a
-        // future extension.
-        if let Some(ref reg) = entry.registry {
-            eprintln!(
-                "cache_entry_creator: skipping {}: non-default registry ({}) manifests are not supported in v1",
-                entry.name_version, reg
-            );
-            continue;
-        }
-
-        by_name.entry(pkg_name).or_default().push(entry.manifest.clone());
+        groups
+            .entry((pkg_name, entry.registry.clone()))
+            .or_default()
+            .push(entry.manifest.clone());
     }
 
     fs::create_dir_all(out)?;
 
-    for (name, versions) in by_name {
-        let pkg_meta = PackageMeta { name: name.clone(), versions };
+    for ((name, registry), versions) in groups {
+        let pkg_meta = PackageMeta {
+            name: name.clone(),
+            versions,
+        };
         let manifest = build_manifest(&pkg_meta);
-        let filename = manifest_file_name(&name);
+        let (hash, href_len) = match registry.as_deref() {
+            None => (default_url_hash(), DEFAULT_REGISTRY_HREF_LEN),
+            Some(href) => (url_hash(href), registry_href_len(href)),
+        };
+        let filename = manifest_file_name(&name, registry.as_deref());
         let out_path = out.join(&filename);
         let mut file = fs::File::create(&out_path)?;
-        serialize::write(&manifest, default_url_hash(), DEFAULT_REGISTRY_HREF_LEN, &mut file)?;
+        serialize::write(&manifest, hash, href_len, &mut file)?;
         eprintln!("Wrote manifest: {}", out_path.display());
     }
 
@@ -203,8 +199,7 @@ mod tests {
 
     /// Create a temporary directory for a test, unique per process + test name.
     fn temp_test_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("cec-test-{}-{}", label, std::process::id()));
+        let dir = std::env::temp_dir().join(format!("cec-test-{}-{}", label, std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp dir");
         dir
@@ -247,7 +242,7 @@ mod tests {
         run_manifest(&out_dir, &meta_path).expect("manifest mode should succeed");
 
         // (a) Assert the output file is named exactly <wyhash(name)>.npm.
-        let expected_filename = manifest_file_name("@neoconfetti/svelte");
+        let expected_filename = manifest_file_name("@neoconfetti/svelte", None);
         let out_file = out_dir.join(&expected_filename);
         assert!(
             out_file.exists(),
@@ -279,7 +274,9 @@ mod tests {
         );
 
         // Version 2.2.2 present with the expected peer dependency.
-        let pv = rm.find_version("2.2.2").expect("version 2.2.2 should be present");
+        let pv = rm
+            .find_version("2.2.2")
+            .expect("version 2.2.2 should be present");
         let peers = pv.peer_dependencies();
         assert_eq!(
             peers.get("svelte").map(|s| s.as_str()),
@@ -300,8 +297,7 @@ mod tests {
         fs::write(pkg_dir.join("package.json"), r#"{"name":"react"}"#).unwrap();
 
         // Run symlink mode.
-        run_symlink(&out_dir, "react@18.3.1", &pkg_dir, None)
-            .expect("symlink mode should succeed");
+        run_symlink(&out_dir, "react@18.3.1", &pkg_dir, None).expect("symlink mode should succeed");
 
         // Assert the symlink exists at the expected basename.
         let expected_basename =
@@ -340,5 +336,53 @@ mod tests {
             link_path.display(),
             expected_basename
         );
+    }
+
+    #[test]
+    fn manifest_mode_non_default_registry_writes_keyed_file() {
+        let entry_meta_json = r#"[
+          {
+            "name_version": "react@19.2.7",
+            "hash": "sha512-HNe9WslTbXmFK8o8cmwgAeJFSBvt1bPdHCVKtaaV+WlAN36mpT4hcRpwbf3fY56ar2oIXzsBpOAiIRHAdY0OlQ==",
+            "registry": "https://registry.npmmirror.com",
+            "manifest": {
+              "version": "19.2.7",
+              "tarball_url": "https://registry.npmmirror.com/react/-/react-19.2.7.tgz",
+              "integrity": "",
+              "dependencies": {},
+              "peer_dependencies": {},
+              "optional_dependencies": {},
+              "optional_peers": [],
+              "bin": {},
+              "os": [],
+              "cpu": [],
+              "has_install_script": false
+            }
+          }
+        ]"#;
+
+        let out_dir = temp_test_dir("manifest-npmmirror");
+        let meta_path = out_dir.join("meta.json");
+        fs::write(&meta_path, entry_meta_json).unwrap();
+
+        run_manifest(&out_dir, &meta_path).expect("manifest mode should succeed");
+
+        // <wyhash11("react")>-<wyhash11("https://registry.npmmirror.com")>.npm
+        let out_file = out_dir.join("94c49019ded8e790-02200d3777602379.npm");
+        assert!(
+            out_file.exists(),
+            "expected `{}`; dir contents: {:?}",
+            out_file.display(),
+            fs::read_dir(&out_dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .collect::<Vec<_>>()
+        );
+
+        let rm = read(&fs::read(&out_file).unwrap()).expect("should parse .npm file");
+        assert_eq!(rm.url_hash, 0x02200d3777602379, "header url_hash mismatch");
+        assert_eq!(rm.href_len, 30, "header href_len mismatch");
+        assert_eq!(rm.name(), b"react");
+        assert!(rm.find_version("19.2.7").is_some());
     }
 }

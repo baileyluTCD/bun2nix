@@ -3,13 +3,13 @@
 
 #![warn(missing_docs)]
 
-use bun2nix::{Options, Result, build_packages, render_packages};
-use log::error;
+use bun2nix::{Options, RegistryConfig, Result, build_packages, render_packages};
+use log::{error, warn};
 
 use std::{
     fs::{self, File},
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use clap::Parser;
@@ -33,6 +33,20 @@ pub struct Cli {
     copy_prefix: String,
 }
 
+/// Read an optional project-local config file. Absence is normal; any other
+/// IO failure is surfaced as a warning because silently ignoring the file
+/// would generate manifest cache keys bun won't find at install time.
+fn read_optional_config(path: &Path) -> Option<String> {
+    match fs::read_to_string(path) {
+        Ok(content) => Some(content),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            warn!("Failed to read {}: {e}", path.display());
+            None
+        }
+    }
+}
+
 fn main() {
     let log_env = Env::default().default_filter_or("warn");
     env_logger::Builder::from_env(log_env).init();
@@ -52,7 +66,16 @@ fn run() -> Result<()> {
 
     let lockfile = fs::read_to_string(&cli.lock_file)?;
 
-    let packages = build_packages(&lockfile)?;
+    // Project-local config only: ./bunfig.toml then ./.npmrc next to the
+    // lockfile (.npmrc overrides per key). Global/env/CLI layers are
+    // deliberately not read — the Nix sandbox's bun can't see them either,
+    // and the .npm cache key must match what bun computes there.
+    let dir = cli.lock_file.parent().unwrap_or(Path::new("."));
+    let bunfig = read_optional_config(&dir.join("bunfig.toml"));
+    let npmrc = read_optional_config(&dir.join(".npmrc"));
+    let registry_config = RegistryConfig::parse(bunfig.as_deref(), npmrc.as_deref())?;
+
+    let packages = build_packages(&lockfile, &registry_config)?;
 
     let nix = render_packages(
         packages,
@@ -70,4 +93,3 @@ fn run() -> Result<()> {
 
     Ok(())
 }
-

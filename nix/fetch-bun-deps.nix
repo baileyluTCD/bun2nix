@@ -192,10 +192,12 @@ in
           buildPackage = config.fetchBunDeps.buildPackage args;
           overridePackage = config.fetchBunDeps.overridePackage args;
 
-          # Collect `EntryMeta` records for every default-registry package that
-          # carries a `manifest` attr (added by newer `bun2nix`). The
+          # Collect `EntryMeta` records for every package that carries a
+          # `manifest` attr (added by newer `bun2nix`). The
           # `cache_entry_creator manifest` subcommand turns these into the
-          # synthesized `<wyhash>.npm` files bun consults at resolve time.
+          # synthesized `<wyhash>.npm` files bun consults at resolve time; a
+          # `manifest.registry` attr (non-default registries) selects the
+          # registry-keyed `<wyhash>-<wyhash>.npm` filename.
           #
           # The `bun.nix` `manifest` attr is camelCase and omits `version`/
           # `integrity`; `VersionMeta` deserialises snake_case and requires both.
@@ -212,18 +214,18 @@ in
                 {
                   name_version = name;
                   hash = pkg.outputHash or "";
-                  registry = null;
+                  registry = m.registry or null;
                   manifest = {
                     version = lib.last (lib.splitString "@" name);
                     tarball_url = m.tarballUrl;
                     integrity = "";
-                    dependencies = m.dependencies;
+                    inherit (m) dependencies;
                     peer_dependencies = m.peerDependencies;
                     optional_dependencies = m.optionalDependencies;
                     optional_peers = m.optionalPeers;
-                    bin = m.bin;
-                    os = m.os;
-                    cpu = m.cpu;
+                    inherit (m) bin;
+                    inherit (m) os;
+                    inherit (m) cpu;
                     has_install_script = m.hasInstallScript;
                   };
                 }
@@ -253,12 +255,13 @@ in
 
         pkgs.symlinkJoin {
           name = "bun-cache";
-          paths = lib.pipe packages [
-            (builtins.mapAttrs overridePackage)
-            (builtins.mapAttrs buildPackage)
-            builtins.attrValues
-          ]
-          ++ [ manifestCache ];
+          paths =
+            lib.pipe packages [
+              (builtins.mapAttrs overridePackage)
+              (builtins.mapAttrs buildPackage)
+              builtins.attrValues
+            ]
+            ++ [ manifestCache ];
         };
     };
 }

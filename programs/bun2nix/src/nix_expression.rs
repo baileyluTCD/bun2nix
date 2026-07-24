@@ -102,18 +102,33 @@ mod tests {
         );
 
         // (b) manifest block present with required keys
-        assert!(out.contains("manifest = {"), "missing manifest block:\n{out}");
+        assert!(
+            out.contains("manifest = {"),
+            "missing manifest block:\n{out}"
+        );
         assert!(out.contains("tarballUrl ="), "missing tarballUrl:\n{out}");
-        assert!(out.contains("dependencies ="), "missing dependencies:\n{out}");
-        assert!(out.contains("optionalPeers ="), "missing optionalPeers:\n{out}");
-        assert!(out.contains("\"bar\" = \"^1.0.0\""), "missing dep entry:\n{out}");
+        assert!(
+            out.contains("dependencies ="),
+            "missing dependencies:\n{out}"
+        );
+        assert!(
+            out.contains("optionalPeers ="),
+            "missing optionalPeers:\n{out}"
+        );
+        assert!(
+            out.contains("\"bar\" = \"^1.0.0\""),
+            "missing dep entry:\n{out}"
+        );
 
         // (c) no integrity key (reused from entry hash downstream)
         assert!(
             !out.contains("integrity"),
             "integrity must not be emitted:\n{out}"
         );
-        assert!(!out.contains("SHOULD_NOT_APPEAR"), "integrity value leaked:\n{out}");
+        assert!(
+            !out.contains("SHOULD_NOT_APPEAR"),
+            "integrity value leaked:\n{out}"
+        );
     }
 
     /// A package with no manifest must render byte-identically to the
@@ -183,6 +198,68 @@ hash = \"sha512-AAAA\";\n  \
         assert!(
             out.contains("back\\\\slash \\\"quote\\\" \\${interp}"),
             "special characters not escaped:\n{out}"
+        );
+    }
+
+    /// A package with a non-default registry renders `registry = "...";`
+    /// inside its manifest block; a default-registry package must not.
+    #[test]
+    fn renders_registry_attr_for_non_default_entries() {
+        let url = "https://registry.npmmirror.com/react/-/react-19.2.7.tgz";
+        let fetcher = Fetcher::FetchUrl {
+            url: url.to_string(),
+            hash: "sha512-AAAA".to_string(),
+            name: Some("react-19.2.7.tgz".to_string()),
+        };
+        let vm = VersionMeta {
+            version: "19.2.7".to_string(),
+            tarball_url: url.to_string(),
+            integrity: String::new(),
+            dependencies: BTreeMap::new(),
+            peer_dependencies: BTreeMap::new(),
+            optional_dependencies: BTreeMap::new(),
+            optional_peers: vec![],
+            bin: BTreeMap::new(),
+            os: vec![],
+            cpu: vec![],
+            has_install_script: false,
+        };
+        let mut pkg = Package::new("react@19.2.7".to_string(), fetcher).with_manifest(vm);
+        pkg.registry = Some("https://registry.npmmirror.com".to_string());
+        let out = render(vec![pkg]);
+
+        assert!(
+            out.contains("registry = \"https://registry.npmmirror.com\";"),
+            "missing registry attr:\n{out}"
+        );
+    }
+
+    #[test]
+    fn no_registry_attr_for_default_entries() {
+        let fetcher = Fetcher::FetchUrl {
+            url: "https://registry.npmjs.org/foo/-/foo-1.0.0.tgz".to_string(),
+            hash: "sha512-AAAA".to_string(),
+            name: None,
+        };
+        let vm = VersionMeta {
+            version: "1.0.0".to_string(),
+            tarball_url: "https://registry.npmjs.org/foo/-/foo-1.0.0.tgz".to_string(),
+            integrity: String::new(),
+            dependencies: BTreeMap::new(),
+            peer_dependencies: BTreeMap::new(),
+            optional_dependencies: BTreeMap::new(),
+            optional_peers: vec![],
+            bin: BTreeMap::new(),
+            os: vec![],
+            cpu: vec![],
+            has_install_script: false,
+        };
+        let pkg = Package::new("foo@1.0.0".to_string(), fetcher).with_manifest(vm);
+        let out = render(vec![pkg]);
+
+        assert!(
+            !out.contains("registry ="),
+            "unexpected registry attr:\n{out}"
         );
     }
 }

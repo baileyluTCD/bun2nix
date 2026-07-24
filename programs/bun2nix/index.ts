@@ -2,6 +2,7 @@
 
 import { convert_lockfile_to_nix_expression, Options } from "./bun2nix-wasm.js";
 
+import { dirname, join } from "node:path";
 import sade from "sade";
 import pkgJson from "./package.json" with { type: "json" };
 
@@ -17,6 +18,12 @@ type CliOpts = {
   "copy-prefix": string;
 };
 
+/** Read a file's text, or undefined when it does not exist. */
+async function readOptionalFile(path: string): Promise<string | undefined> {
+  const file = Bun.file(path);
+  return (await file.exists()) ? await file.text() : undefined;
+}
+
 /**
  * Generate a nix expression for a given bun lockfile
  * Writes to stdout if `output-file` is not specified.
@@ -27,9 +34,20 @@ export async function generateNixExpression(opts: CliOpts): Promise<void> {
   const lock_file = Bun.file(opts["lock-file"]);
   const contents = await lock_file.text();
 
+  // Project-local config only: bunfig.toml then .npmrc next to the lockfile,
+  // matching what bun sees at offline-install time in the Nix sandbox.
+  const dir = dirname(opts["lock-file"]);
+  const bunfig = await readOptionalFile(join(dir, "bunfig.toml"));
+  const npmrc = await readOptionalFile(join(dir, ".npmrc"));
+
   const options = new Options(opts["copy-prefix"]);
 
-  const nix_expression = convertLockfileToNixExpression(contents, options);
+  const nix_expression = convertLockfileToNixExpression(
+    contents,
+    options,
+    bunfig,
+    npmrc,
+  );
 
   const output_file = opts["output-file"] || Bun.stdout;
   await Bun.write(output_file, nix_expression + "\n");
@@ -61,11 +79,15 @@ prog.parse(process.argv);
  *
  * @param {string} contents - The contents of a bun lockfile
  * @param {Options} options - Lockfile conversion options
+ * @param {string} [bunfig] - Project-local bunfig.toml contents
+ * @param {string} [npmrc] - Project-local .npmrc contents
  * @return {string} The generated nix expression
  */
 export function convertLockfileToNixExpression(
   contents: string,
   options: Options,
+  bunfig?: string,
+  npmrc?: string,
 ): string {
-  return convert_lockfile_to_nix_expression(contents, options);
+  return convert_lockfile_to_nix_expression(contents, options, bunfig, npmrc);
 }
