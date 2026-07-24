@@ -254,6 +254,124 @@ fn peer_dep_optional_ordering_round_trip() {
     }
 }
 
+/// Minimal `VersionMeta` with just a version string and a synthetic tarball URL.
+fn bare_version(version: &str) -> meta::VersionMeta {
+    use std::collections::BTreeMap;
+    meta::VersionMeta {
+        version: version.to_string(),
+        tarball_url: format!("https://registry.npmjs.org/fake-pkg/-/fake-pkg-{version}.tgz"),
+        integrity: String::new(),
+        dependencies: BTreeMap::new(),
+        optional_dependencies: BTreeMap::new(),
+        peer_dependencies: BTreeMap::new(),
+        optional_peers: vec![],
+        bin: BTreeMap::new(),
+        os: vec![],
+        cpu: vec![],
+        has_install_script: false,
+    }
+}
+
+fn write_default_registry(built: &serialize::PackageManifest) -> Vec<u8> {
+    let mut out = Vec::new();
+    serialize::write(
+        built,
+        manifest::DEFAULT_URL_HASH,
+        manifest::DEFAULT_REGISTRY_HREF_LEN,
+        &mut out,
+    )
+    .unwrap();
+    out
+}
+
+/// A pre-release version must land in the `prereleases` map (bun's
+/// `find_by_version` only searches there when the queried version has a tag)
+/// with `tag.pre` hashed the way bun hashes it: `wyhash11(0, pre_bytes)`.
+#[test]
+fn prerelease_round_trip() {
+    use bun2nix_core::wyhash::wyhash11;
+
+    let pkg = meta::PackageMeta {
+        name: "nitro".to_string(),
+        versions: vec![bare_version("3.0.1-alpha.1")],
+    };
+
+    let built = build::build_manifest(&pkg);
+    let parsed = read(&write_default_registry(&built)).expect("manifest must parse");
+
+    assert_eq!(parsed.pkg.releases.keys.len, 0, "no release versions expected");
+    assert_eq!(parsed.pkg.prereleases.keys.len, 1, "the pre-release must be in prereleases");
+
+    let key = parsed.versions[parsed.pkg.prereleases.keys.off as usize];
+    assert_eq!((key.major, key.minor, key.patch), (3, 0, 1));
+    assert_eq!(
+        key.tag.pre.hash,
+        wyhash11(0, b"alpha.1"),
+        "pre tag hash must match bun's wyhash of the pre span (Tag.eql compares hashes)"
+    );
+    assert_eq!(
+        resolve_str(&key.tag.pre, &parsed.string_buf),
+        b"alpha.1",
+        "pre tag text must be recoverable for version-string display"
+    );
+
+    let v = parsed
+        .find_version("3.0.1-alpha.1")
+        .expect("pre-release must be findable by its full version string");
+    assert_eq!(v.tarball_url(), pkg.versions[0].tarball_url);
+
+    // The tag-stripped triple must NOT satisfy a release lookup.
+    assert!(
+        parsed.find_version("3.0.1").is_none(),
+        "bare 3.0.1 must not resolve — the only version is the pre-release"
+    );
+}
+
+/// Releases and prereleases share one versions buffer: releases first
+/// (ascending), then prereleases. Every version must be findable and the two
+/// maps must index disjoint slices.
+#[test]
+fn mixed_release_prerelease_round_trip() {
+    let pkg = meta::PackageMeta {
+        name: "fake-pkg".to_string(),
+        versions: vec![
+            bare_version("2.0.0-beta.2"),
+            bare_version("1.5.0"),
+            bare_version("2.0.0-beta.11"),
+            bare_version("1.0.0"),
+        ],
+    };
+
+    let built = build::build_manifest(&pkg);
+    let parsed = read(&write_default_registry(&built)).expect("manifest must parse");
+
+    assert_eq!(parsed.pkg.releases.keys.off, 0);
+    assert_eq!(parsed.pkg.releases.keys.len, 2);
+    assert_eq!(parsed.pkg.prereleases.keys.off, 2);
+    assert_eq!(parsed.pkg.prereleases.keys.len, 2);
+
+    // Releases ascending: 1.0.0 then 1.5.0.
+    assert_eq!(parsed.versions[0].minor, 0);
+    assert_eq!(parsed.versions[1].minor, 5);
+
+    // Prereleases ascending by bun's numeric-aware tag order: beta.2 < beta.11.
+    assert_eq!(
+        resolve_str(&parsed.versions[2].tag.pre, &parsed.string_buf),
+        b"beta.2"
+    );
+    assert_eq!(
+        resolve_str(&parsed.versions[3].tag.pre, &parsed.string_buf),
+        b"beta.11"
+    );
+
+    for vm in &pkg.versions {
+        let v = parsed
+            .find_version(&vm.version)
+            .unwrap_or_else(|| panic!("version {} must be present", vm.version));
+        assert_eq!(v.tarball_url(), vm.tarball_url, "tarball_url for {}", vm.version);
+    }
+}
+
 /// Tripwire: assert that the manifest cache format version string is still
 /// `bun-npm-manifest-cache-v0.0.7`.
 ///

@@ -433,20 +433,35 @@ impl ReadManifest {
         self.pkg.public_max_age
     }
 
-    /// Look up a release version by its semver string (e.g. `"2.2.2"`).
-    ///
-    /// Returns `None` if the version is not present in `releases`.  Pre-release
-    /// versions (tag present) are not searched.
+    /// Look up a version by its semver string (e.g. `"2.2.2"` or
+    /// `"3.0.1-alpha.1"`), mirroring bun's `find_by_version`: the map is
+    /// chosen by whether the version carries a pre-release tag, and equality
+    /// compares the numeric triple plus the wyhash of the pre tag.
     pub fn find_version(&self, version_str: &str) -> Option<ReadPackageVersion<'_>> {
-        let (major, minor, patch) = parse_semver_str(version_str)?;
+        let v = build::parse_version(version_str);
+        let map = if v.pre.is_empty() {
+            self.pkg.releases
+        } else {
+            self.pkg.prereleases
+        };
+        // Hash 0 is what bun's parser leaves in `tag.pre` for tagless versions.
+        let pre_hash = if v.pre.is_empty() {
+            0
+        } else {
+            wyhash11(0, v.pre.as_bytes())
+        };
 
-        let keys_slice = &self.versions[self.pkg.releases.keys.off as usize
-            ..(self.pkg.releases.keys.off + self.pkg.releases.keys.len) as usize];
-        let pvs_slice = &self.package_versions[self.pkg.releases.values.off as usize
-            ..(self.pkg.releases.values.off + self.pkg.releases.values.len) as usize];
+        let keys_slice =
+            &self.versions[map.keys.off as usize..(map.keys.off + map.keys.len) as usize];
+        let pvs_slice = &self.package_versions
+            [map.values.off as usize..(map.values.off + map.values.len) as usize];
 
-        for (i, v) in keys_slice.iter().enumerate() {
-            if v.major == major && v.minor == minor && v.patch == patch {
+        for (i, k) in keys_slice.iter().enumerate() {
+            if k.major == v.major
+                && k.minor == v.minor
+                && k.patch == v.patch
+                && k.tag.pre.hash == pre_hash
+            {
                 return Some(ReadPackageVersion {
                     manifest: self,
                     pv: pvs_slice[i],
@@ -455,16 +470,4 @@ impl ReadManifest {
         }
         None
     }
-}
-
-/// Parse `"major.minor.patch"` into `(major, minor, patch)`.  Returns `None`
-/// if the string cannot be parsed.
-fn parse_semver_str(s: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = s.splitn(3, '.');
-    let major: u64 = parts.next()?.parse().ok()?;
-    let minor: u64 = parts.next()?.parse().ok()?;
-    // Strip any pre-release suffix after the patch number.
-    let patch_str = parts.next()?;
-    let patch: u64 = patch_str.split('-').next().unwrap_or("").parse().ok()?;
-    Some((major, minor, patch))
 }

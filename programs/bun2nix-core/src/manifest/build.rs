@@ -8,12 +8,14 @@
 //! [`super::build_dep_group`] — the same interning primitives used by
 //! [`super::build_single_version`] — so string-buffer logic lives in one place.
 
+use std::cmp::Ordering;
+
 use super::{
     StringArena, build_dep_group,
     layout::{
         Architecture, Bin, BinValue, DistTagMap, ExternVersionMap, ExternalString,
         ExternalStringList, Integrity, IntegrityTag, NpmPackage, OperatingSystem, PackageVersion,
-        PackageVersionList, SemverString, SemverVersion, VersionSlice,
+        PackageVersionList, SemverString, SemverVersion, Tag, VersionSlice,
     },
     meta::{PackageMeta, VersionMeta},
     serialize::PackageManifest,
@@ -46,27 +48,62 @@ pub fn build_manifest(pkg: &PackageMeta) -> PackageManifest {
     // Package name (inlined if ≤ 8 bytes, stored in the arena otherwise).
     let name_ext = arena.intern(&pkg.name);
 
-    // Sort versions ascending (deterministic output regardless of JSON order).
-    let mut sorted: Vec<&VersionMeta> = pkg.versions.iter().collect();
-    sorted.sort_by_key(|v| parse_semver(&v.version));
+    // Partition into releases and pre-releases: bun's `find_by_version` picks
+    // the map by `version.tag.has_pre()`, so a pre-release stored under
+    // `releases` is unreachable.  Both maps index contiguous slices of the one
+    // shared versions buffer — releases first, then prereleases.
+    let mut releases: Vec<(&VersionMeta, ParsedVersion<'_>)> = Vec::new();
+    let mut prereleases: Vec<(&VersionMeta, ParsedVersion<'_>)> = Vec::new();
+    for vm in &pkg.versions {
+        let pv = parse_version(&vm.version);
+        if pv.pre.is_empty() {
+            releases.push((vm, pv));
+        } else {
+            prereleases.push((vm, pv));
+        }
+    }
 
-    let mut semver_versions: Vec<SemverVersion> = Vec::with_capacity(sorted.len());
-    let mut package_versions: Vec<PackageVersion> = Vec::with_capacity(sorted.len());
+    // Sort ascending: bun's `find_best_version` scans each list from the end
+    // and takes the first satisfying version, assuming ascending order.
+    // Pre-release tags order by bun's dot-segment rules (numeric-aware); the
+    // version-string tiebreak keeps output deterministic when two tags compare
+    // equal (e.g. "1" vs "01").
+    releases.sort_by(|a, b| {
+        triple(&a.1).cmp(&triple(&b.1)).then_with(|| a.0.version.cmp(&b.0.version))
+    });
+    prereleases.sort_by(|a, b| {
+        triple(&a.1)
+            .cmp(&triple(&b.1))
+            .then_with(|| order_pre(a.1.pre, b.1.pre))
+            .then_with(|| a.0.version.cmp(&b.0.version))
+    });
 
-    for vm in &sorted {
-        let (major, minor, patch) = parse_semver(&vm.version);
+    let n_rel = releases.len() as u32;
+    let n_pre = prereleases.len() as u32;
+
+    let mut semver_versions: Vec<SemverVersion> = Vec::with_capacity(pkg.versions.len());
+    let mut package_versions: Vec<PackageVersion> = Vec::with_capacity(pkg.versions.len());
+
+    for (vm, parsed) in releases.iter().chain(prereleases.iter()) {
+        // Empty tag components stay `ExternalString::default()` (hash 0):
+        // `Tag::eql` compares pre hashes, and bun parses a tagless version
+        // query to hash 0 — interning "" would store wyhash11(0, "") instead.
+        let tag = Tag {
+            pre: intern_tag(&mut arena, parsed.pre),
+            build: intern_tag(&mut arena, parsed.build),
+        };
         semver_versions.push(SemverVersion {
-            major,
-            minor,
-            patch,
-            ..SemverVersion::default()
+            major: parsed.major,
+            minor: parsed.minor,
+            patch: parsed.patch,
+            tag,
         });
 
         let pv = build_one_version(vm, &mut arena, &mut names, &mut values, &mut bin_entries);
         package_versions.push(pv);
     }
 
-    let n = sorted.len() as u32;
+    let n = n_rel + n_pre;
     let n_names = names.len() as u32;
     let external_strings = names.into_boxed_slice();
     let external_strings_for_versions = values.into_boxed_slice();
@@ -80,12 +117,16 @@ pub fn build_manifest(pkg: &PackageMeta) -> PackageManifest {
         ..NpmPackage::default()
     };
 
-    // releases: keys = entire versions array, values = entire package_versions array.
+    // releases occupy [0, n_rel) of the shared buffers, prereleases
+    // [n_rel, n_rel + n_pre).
     pkg_struct.releases = ExternVersionMap {
-        keys: VersionSlice::new(0, n),
-        values: PackageVersionList::new(0, n),
+        keys: VersionSlice::new(0, n_rel),
+        values: PackageVersionList::new(0, n_rel),
     };
-    pkg_struct.prereleases = ExternVersionMap::default();
+    pkg_struct.prereleases = ExternVersionMap {
+        keys: VersionSlice::new(n_rel, n_pre),
+        values: PackageVersionList::new(n_rel, n_pre),
+    };
     // dist_tags: left empty (v1 scope — see brief "Leave dist_tags empty").
     pkg_struct.dist_tags = DistTagMap::default();
     pkg_struct.versions_buf = VersionSlice::new(0, n);
@@ -268,53 +309,112 @@ fn b64_val(b: u8) -> Option<u8> {
 // OS / CPU bit-flags
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Parse an npm `"os"` array into [`OperatingSystem`] bitflags.
-/// An empty list means "all OSes" (`OperatingSystem::ALL`).
-fn parse_os(os: &[String]) -> OperatingSystem {
-    if os.is_empty() {
-        return OperatingSystem::ALL;
-    }
-    let mut flags: u16 = 0;
-    for s in os {
-        flags |= match s.as_str() {
-            "aix" => OperatingSystem::AIX,
-            "darwin" | "macos" => OperatingSystem::DARWIN,
-            "freebsd" => OperatingSystem::FREEBSD,
-            "linux" => OperatingSystem::LINUX,
-            "openbsd" => OperatingSystem::OPENBSD,
-            "sunos" => OperatingSystem::SUNOS,
-            "win32" => OperatingSystem::WIN32,
-            "android" => OperatingSystem::ANDROID,
-            _ => 0,
+/// Fold an npm `"os"`/`"cpu"` token list into a bitset, porting bun's
+/// `Negatable` accumulator + `combine`:
+///
+/// - `"any"` is a wildcard (→ all bits) and `"none"` an unrecognized value
+///   (→ no bits), unless a later recognized token resets either flag;
+/// - `"!name"` adds to a removed set;
+/// - empty / only-unrecognized → NONE, only-removed → ALL minus removed,
+///   only-added → added, mixed → added minus removed;
+/// - an empty list means "all".
+///
+/// bun writes these token shapes back into `bun.lock` (`"none"`, one name,
+/// one negated name, or an array), so round-tripping them exactly matters.
+fn combine_negatable(list: &[String], all: u16, lookup: fn(&str) -> Option<u16>) -> u16 {
+    let mut added: u16 = 0;
+    let mut removed: u16 = 0;
+    let mut had_wildcard = false;
+    let mut had_unrecognized = false;
+
+    for s in list {
+        if s.is_empty() {
+            continue;
+        }
+        if s == "any" {
+            had_wildcard = true;
+            continue;
+        }
+        if s == "none" {
+            had_unrecognized = true;
+            continue;
+        }
+        let (is_not, name) = match s.strip_prefix('!') {
+            Some(rest) => (true, rest),
+            None => (false, s.as_str()),
         };
+        let Some(bit) = lookup(name) else {
+            if !is_not {
+                had_unrecognized = true;
+            }
+            continue;
+        };
+        // A recognized token resets the wildcard/unrecognized flags, so
+        // ["any", "linux"] collapses to LINUX.
+        had_wildcard = false;
+        had_unrecognized = false;
+        if is_not {
+            removed |= bit;
+        } else {
+            added |= bit;
+        }
     }
-    OperatingSystem(flags)
+
+    let added = if had_wildcard { all } else { added };
+    if added == 0 && removed == 0 {
+        if had_unrecognized {
+            return 0;
+        }
+        return all;
+    }
+    if added == 0 {
+        return all & !removed;
+    }
+    if removed == 0 {
+        return added;
+    }
+    added & !removed
 }
 
-/// Parse an npm `"cpu"` array into [`Architecture`] bitflags.
-/// An empty list means "all architectures" (`Architecture::ALL`).
+fn os_bit(name: &str) -> Option<u16> {
+    Some(match name {
+        "aix" => OperatingSystem::AIX,
+        "darwin" => OperatingSystem::DARWIN,
+        "freebsd" => OperatingSystem::FREEBSD,
+        "linux" => OperatingSystem::LINUX,
+        "openbsd" => OperatingSystem::OPENBSD,
+        "sunos" => OperatingSystem::SUNOS,
+        "win32" => OperatingSystem::WIN32,
+        "android" => OperatingSystem::ANDROID,
+        _ => return None,
+    })
+}
+
+fn cpu_bit(name: &str) -> Option<u16> {
+    Some(match name {
+        "arm" => Architecture::ARM,
+        "arm64" => Architecture::ARM64,
+        "ia32" => Architecture::IA32,
+        "mips" => Architecture::MIPS,
+        "mipsel" => Architecture::MIPSEL,
+        "ppc" => Architecture::PPC,
+        "ppc64" => Architecture::PPC64,
+        "s390" => Architecture::S390,
+        "s390x" => Architecture::S390X,
+        "x32" => Architecture::X32,
+        "x64" => Architecture::X64,
+        _ => return None,
+    })
+}
+
+/// Parse an npm `"os"` list into [`OperatingSystem`] bitflags.
+fn parse_os(os: &[String]) -> OperatingSystem {
+    OperatingSystem(combine_negatable(os, OperatingSystem::ALL_VALUE, os_bit))
+}
+
+/// Parse an npm `"cpu"` list into [`Architecture`] bitflags.
 fn parse_cpu(cpu: &[String]) -> Architecture {
-    if cpu.is_empty() {
-        return Architecture::ALL;
-    }
-    let mut flags: u16 = 0;
-    for s in cpu {
-        flags |= match s.as_str() {
-            "arm" => Architecture::ARM,
-            "arm64" => Architecture::ARM64,
-            "ia32" => Architecture::IA32,
-            "mips" => Architecture::MIPS,
-            "mipsel" => Architecture::MIPSEL,
-            "ppc" => Architecture::PPC,
-            "ppc64" => Architecture::PPC64,
-            "s390" => Architecture::S390,
-            "s390x" => Architecture::S390X,
-            "x32" => Architecture::X32,
-            "x64" => Architecture::X64,
-            _ => 0,
-        };
-    }
-    Architecture(flags)
+    Architecture(combine_negatable(cpu, Architecture::ALL_VALUE, cpu_bit))
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -386,15 +486,250 @@ fn ss_hi(ss: &SemverString) -> u32 {
 // Semver helpers
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Parse `"major.minor.patch"` (optionally with a pre-release suffix) into a
-/// sortable `(major, minor, patch)` triple.  Unknown components default to 0.
-pub(crate) fn parse_semver(s: &str) -> (u64, u64, u64) {
+/// A version string decomposed into its numeric triple and tag components.
+/// `pre`/`build` are empty when the version has no such component.
+pub(crate) struct ParsedVersion<'a> {
+    pub(crate) major: u64,
+    pub(crate) minor: u64,
+    pub(crate) patch: u64,
+    pub(crate) pre: &'a str,
+    pub(crate) build: &'a str,
+}
+
+/// Parse `"major.minor.patch[-pre][+build]"`.  Unknown numeric components
+/// default to 0; the tag portion follows bun's `Tag.parse` state machine so
+/// the pre span (and therefore its hash) matches what bun computes when it
+/// parses the same version at install time.
+pub(crate) fn parse_version(s: &str) -> ParsedVersion<'_> {
     let mut parts = s.splitn(3, '.');
     let major: u64 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
     let minor: u64 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    let patch: u64 = parts
-        .next()
-        .and_then(|p| p.split('-').next()?.parse().ok())
-        .unwrap_or(0);
-    (major, minor, patch)
+    let rest = parts.next().unwrap_or("");
+    let digits_end = rest.bytes().position(|b| !b.is_ascii_digit()).unwrap_or(rest.len());
+    let patch: u64 = rest[..digits_end].parse().unwrap_or(0);
+    let (pre, build) = parse_tag(&rest[digits_end..]);
+    ParsedVersion {
+        major,
+        minor,
+        patch,
+        pre,
+        build,
+    }
+}
+
+/// Extract `(pre, build)` spans from the tag portion of a version string
+/// (everything after the patch digits, including the leading `-`/`+`).
+///
+/// Port of bun's `Tag.parse` state machine: pre starts after the FIRST `-`
+/// (later hyphens are kept inside the span, so `--canary.0` yields
+/// `-canary.0`), build starts after the first `+`, and scanning stops at the
+/// first character outside `[A-Za-z0-9.+-]`.
+fn parse_tag(tag: &str) -> (&str, &str) {
+    #[derive(PartialEq, Clone, Copy)]
+    enum State {
+        None,
+        Pre,
+        Build,
+    }
+    let mut pre = "";
+    let mut build = "";
+    let mut state = State::None;
+    let mut start = 0usize;
+
+    for (i, c) in tag.bytes().enumerate() {
+        match c {
+            b'+' => {
+                if state == State::Pre {
+                    pre = &tag[start..i];
+                }
+                if state != State::Build {
+                    state = State::Build;
+                    start = i + 1;
+                }
+            }
+            b'-' => {
+                if state != State::Pre {
+                    state = State::Pre;
+                    start = i + 1;
+                }
+            }
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' => {}
+            _ => {
+                match state {
+                    State::None => {}
+                    State::Pre => pre = &tag[start..i],
+                    State::Build => build = &tag[start..i],
+                }
+                return (pre, build);
+            }
+        }
+    }
+    match state {
+        State::None => {}
+        State::Pre => pre = &tag[start..],
+        State::Build => build = &tag[start..],
+    }
+    (pre, build)
+}
+
+/// Intern a tag component, or return the all-zero `ExternalString` (hash 0)
+/// when the component is absent — the value bun's `Tag.eql` expects for a
+/// tagless version.
+fn intern_tag(arena: &mut StringArena, s: &str) -> ExternalString {
+    if s.is_empty() {
+        ExternalString::default()
+    } else {
+        arena.intern(s)
+    }
+}
+
+#[inline]
+fn triple(p: &ParsedVersion<'_>) -> (u64, u64, u64) {
+    (p.major, p.minor, p.patch)
+}
+
+/// Order two pre-release tags by bun's `Tag.order_pre` rules: split on `.`,
+/// compare segments numerically when both parse as integers, otherwise
+/// bytewise (a numeric segment sorts before a non-numeric one); a longer tag
+/// that shares its prefix sorts after the shorter one.
+fn order_pre(lhs: &str, rhs: &str) -> Ordering {
+    let mut lhs_itr = lhs.split('.');
+    let mut rhs_itr = rhs.split('.');
+    loop {
+        match (lhs_itr.next(), rhs_itr.next()) {
+            (None, None) => return Ordering::Equal,
+            (Some(_), None) => return Ordering::Greater,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(l), Some(r)) => {
+                let l_uint: Option<u64> = l.parse().ok();
+                let r_uint: Option<u64> = r.parse().ok();
+                match (l_uint, r_uint) {
+                    (Some(_), None) => return Ordering::Less,
+                    (None, Some(_)) => return Ordering::Greater,
+                    (Some(l), Some(r)) => match l.cmp(&r) {
+                        Ordering::Equal => continue,
+                        not_equal => return not_equal,
+                    },
+                    (None, None) => match l.cmp(r) {
+                        Ordering::Equal => continue,
+                        not_equal => return not_equal,
+                    },
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_version_release() {
+        let p = parse_version("1.2.3");
+        assert_eq!((p.major, p.minor, p.patch), (1, 2, 3));
+        assert_eq!(p.pre, "");
+        assert_eq!(p.build, "");
+    }
+
+    #[test]
+    fn parse_version_pre() {
+        let p = parse_version("3.0.1-alpha.1");
+        assert_eq!((p.major, p.minor, p.patch), (3, 0, 1));
+        assert_eq!(p.pre, "alpha.1");
+        assert_eq!(p.build, "");
+    }
+
+    #[test]
+    fn parse_version_pre_and_build() {
+        let p = parse_version("1.2.3-beta.2+exp.sha5114f8");
+        assert_eq!((p.major, p.minor, p.patch), (1, 2, 3));
+        assert_eq!(p.pre, "beta.2");
+        assert_eq!(p.build, "exp.sha5114f8");
+    }
+
+    // bun keeps hyphens after the first: `--canary.67e7966.0` is the pre tag
+    // `-canary.67e7966.0` (see the comment in bun's Tag.parse).
+    #[test]
+    fn parse_version_double_hyphen() {
+        let p = parse_version("1.0.0--canary.67e7966.0");
+        assert_eq!((p.major, p.minor, p.patch), (1, 0, 0));
+        assert_eq!(p.pre, "-canary.67e7966.0");
+    }
+
+    #[test]
+    fn parse_version_build_only() {
+        let p = parse_version("1.0.0+20130313144700");
+        assert_eq!(p.pre, "");
+        assert_eq!(p.build, "20130313144700");
+    }
+
+    // The example from bun's order_pre comment:
+    // 1.0.0-canary.0.0.0.0.0.0 < 1.0.0-canary.0.0.0.0.0.1
+    #[test]
+    fn order_pre_numeric_segments() {
+        assert_eq!(order_pre("canary.0.0.0.0.0.0", "canary.0.0.0.0.0.1"), Ordering::Less);
+    }
+
+    #[test]
+    fn order_pre_numeric_before_alpha() {
+        // A segment that parses as an integer sorts before one that doesn't.
+        assert_eq!(order_pre("1", "alpha"), Ordering::Less);
+        assert_eq!(order_pre("alpha", "1"), Ordering::Greater);
+    }
+
+    #[test]
+    fn order_pre_prefix_is_less() {
+        assert_eq!(order_pre("alpha", "alpha.1"), Ordering::Less);
+        assert_eq!(order_pre("alpha.1", "alpha"), Ordering::Greater);
+    }
+
+    #[test]
+    fn order_pre_bytewise_alpha() {
+        assert_eq!(order_pre("alpha", "beta"), Ordering::Less);
+        assert_eq!(order_pre("beta.11", "beta.2"), Ordering::Greater);
+    }
+
+    fn strs(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn negatable_empty_is_all() {
+        assert_eq!(parse_os(&[]).0, OperatingSystem::ALL_VALUE);
+        assert_eq!(parse_cpu(&[]).0, Architecture::ALL_VALUE);
+    }
+
+    // bun serializes a NONE bitset back to bun.lock as the string "none".
+    #[test]
+    fn negatable_none_token() {
+        assert_eq!(parse_os(&strs(&["none"])).0, 0);
+        assert_eq!(parse_cpu(&strs(&["none"])).0, 0);
+    }
+
+    #[test]
+    fn negatable_single_and_negated() {
+        assert_eq!(parse_os(&strs(&["linux"])).0, OperatingSystem::LINUX);
+        assert_eq!(
+            parse_os(&strs(&["!win32"])).0,
+            OperatingSystem::ALL_VALUE & !OperatingSystem::WIN32
+        );
+        assert_eq!(
+            parse_cpu(&strs(&["x64", "!arm64"])).0,
+            Architecture::X64
+        );
+    }
+
+    // ["any", "linux"] collapses to LINUX: a recognized token resets the
+    // wildcard flag (bun's Negatable.apply).
+    #[test]
+    fn negatable_wildcard_reset() {
+        assert_eq!(parse_os(&strs(&["any", "linux"])).0, OperatingSystem::LINUX);
+        assert_eq!(parse_os(&strs(&["any"])).0, OperatingSystem::ALL_VALUE);
+    }
+
+    #[test]
+    fn negatable_unrecognized_is_none() {
+        assert_eq!(parse_os(&strs(&["macos"])).0, 0);
+    }
 }
