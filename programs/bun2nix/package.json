@@ -1,6 +1,6 @@
 {
   "name": "bun2nix",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "module": "index.ts",
   "bin": {
     "bun2nix": "index.ts"

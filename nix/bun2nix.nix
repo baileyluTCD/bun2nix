@@ -25,7 +25,7 @@ in
             src = ../programs/bun2nix;
 
             cargoLock = {
-              lockFile = "${finalAttrs.src}/Cargo.lock";
+              lockFile = finalAttrs.src + "/Cargo.lock";
             };
 
             passthru = with config; {

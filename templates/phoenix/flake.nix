@@ -5,7 +5,7 @@
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
     systems.url = "github:nix-systems/default";
 
-    bun2nix.url = "github:nix-community/bun2nix?ref=2.1.1";
+    bun2nix.url = "github:nix-community/bun2nix?ref=2.1.2";
     bun2nix.inputs.nixpkgs.follows = "nixpkgs";
     bun2nix.inputs.systems.follows = "systems";
   };
@@ -54,7 +54,7 @@
         {
           default = pkgs.mkShellNoCC {
             packages = with pkgs; [
-              elixir_1_19
+              beamPackages.elixir_1_20
               watchman
               bun
 
