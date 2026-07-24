@@ -83,14 +83,14 @@ function bunPatchPhase {
   runHook postBunPatchPhase
 }
 
-# bun re-resolves `catalog:` dependency specifiers against the npm registry on
-# every `bun install`, even with a fully populated cache. In the Nix sandbox
-# this fails. The lockfile already records the exact resolved version for
-# every package, so rewrite every `catalog:` reference (in bun.lock's
-# `workspaces` section and in every workspace package.json) to that exact
-# version (or `workspace:*` for workspace packages) before `bun install`.
-function bunResolveCatalogRefs {
-  if ! [ -f bun.lock ] || ! grep -q '"catalog:' bun.lock 2>/dev/null; then
+# Prepare the project for offline install: rewrite `catalog:` references to
+# the exact versions recorded in bun.lock (bun re-resolves them against the
+# registry otherwise, which fails in the sandbox), and fail fast if bun.lock
+# has drifted from package.json (drift makes bun re-resolve, with the same
+# result). Runs whenever a lockfile exists — the drift check applies to every
+# project, not just those using catalogs.
+function bunPrepareOfflineInstall {
+  if ! [ -f bun.lock ]; then
     return 0
   fi
   # --config=/dev/null: ignore the project's bunfig.toml, which may remap
@@ -103,7 +103,7 @@ function bunNodeModulesInstallPhase {
   pushd "$bunRoot" || exit 1
   runHook preBunNodeModulesInstallPhase
 
-  bunResolveCatalogRefs
+  bunPrepareOfflineInstall
 
   # Remove patchedDependencies from package.json and bun.lock since we
   # pre-patch packages during the Nix build. This ensures bun looks for
