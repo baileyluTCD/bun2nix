@@ -158,7 +158,12 @@ in
   };
 
   config.perSystem =
-    { pkgs, config, ... }:
+    {
+      pkgs,
+      config,
+      self',
+      ...
+    }:
     {
       fetchBunDeps.function =
         {
@@ -186,6 +191,57 @@ in
 
           buildPackage = config.fetchBunDeps.buildPackage args;
           overridePackage = config.fetchBunDeps.overridePackage args;
+
+          # Collect `EntryMeta` records for every default-registry package that
+          # carries a `manifest` attr (added by newer `bun2nix`). The
+          # `cache_entry_creator manifest` subcommand turns these into the
+          # synthesized `<wyhash>.npm` files bun consults at resolve time.
+          #
+          # The `bun.nix` `manifest` attr is camelCase and omits `version`/
+          # `integrity`; `VersionMeta` deserialises snake_case and requires both.
+          # `version` is parsed from the `<name>@<version>` key; `integrity` is
+          # left empty here and refilled by the tool from `hash` (the SRI string
+          # the `fetchurl` FOD exposes as `outputHash`).
+          manifestEntries = builtins.filter (e: e != null) (
+            lib.mapAttrsToList (
+              name: pkg:
+              if pkg ? manifest then
+                let
+                  m = pkg.manifest;
+                in
+                {
+                  name_version = name;
+                  hash = pkg.outputHash or "";
+                  registry = null;
+                  manifest = {
+                    version = lib.last (lib.splitString "@" name);
+                    tarball_url = m.tarballUrl;
+                    integrity = "";
+                    dependencies = m.dependencies;
+                    peer_dependencies = m.peerDependencies;
+                    optional_dependencies = m.optionalDependencies;
+                    optional_peers = m.optionalPeers;
+                    bin = m.bin;
+                    os = m.os;
+                    cpu = m.cpu;
+                    has_install_script = m.hasInstallScript;
+                  };
+                }
+              else
+                null
+            ) packages
+          );
+
+          manifestMeta = pkgs.writeText "bun-manifest-meta.json" (builtins.toJSON manifestEntries);
+
+          # Always produced; for a manifest-less `bun.nix` the entry list is
+          # empty and this yields an empty `share/bun-cache`, which merges
+          # harmlessly into the symlinkJoin below (old files still build).
+          manifestCache = pkgs.runCommandLocal "bun-manifest-cache" { } ''
+            mkdir -p "$out/share/bun-cache"
+            "${lib.getExe self'.packages.cacheEntryCreator}" manifest \
+              --out "$out/share/bun-cache" --meta ${manifestMeta}
+          '';
         in
 
         assert lib.asserts.assertEachOneOf "overrides" (builtins.attrNames overrides) (
@@ -201,7 +257,8 @@ in
             (builtins.mapAttrs overridePackage)
             (builtins.mapAttrs buildPackage)
             builtins.attrValues
-          ];
+          ]
+          ++ [ manifestCache ];
         };
     };
 }

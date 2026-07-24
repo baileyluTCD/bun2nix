@@ -35,6 +35,11 @@ EOF
   BUN_INSTALL_CACHE_DIR=$(mktemp -d)
   export BUN_INSTALL_CACHE_DIR
 
+  # Force bun to honor the on-disk `.npm` manifest cache at resolve time.
+  # Without this bun ignores the synthesized manifests entirely and tries to
+  # hit the network (mode 1 is insufficient; mode 2 is required — Task 3).
+  export BUN_MANIFEST_CACHE=2
+
   # Use -RL to dereference symlinks so bun finds actual directories
   cp -r "$bunDeps"/share/bun-cache/. "$BUN_INSTALL_CACHE_DIR"
 
