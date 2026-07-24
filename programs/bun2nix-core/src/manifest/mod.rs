@@ -168,19 +168,28 @@ pub fn build_single_version(input: &SingleVersionInput) -> PackageManifest {
         &mut arena,
         &mut names,
         &mut values,
-        input.dependencies.iter().map(|d| (d.name.clone(), d.range.clone())),
+        input
+            .dependencies
+            .iter()
+            .map(|d| (d.name.clone(), d.range.clone())),
     );
     let optional_dependencies = build_dep_group(
         &mut arena,
         &mut names,
         &mut values,
-        input.optional_dependencies.iter().map(|d| (d.name.clone(), d.range.clone())),
+        input
+            .optional_dependencies
+            .iter()
+            .map(|d| (d.name.clone(), d.range.clone())),
     );
     let peer_dependencies = build_dep_group(
         &mut arena,
         &mut names,
         &mut values,
-        input.peer_dependencies.iter().map(|d| (d.name.clone(), d.range.clone())),
+        input
+            .peer_dependencies
+            .iter()
+            .map(|d| (d.name.clone(), d.range.clone())),
     );
 
     let integrity = match input.sha512 {
@@ -219,6 +228,10 @@ pub fn build_single_version(input: &SingleVersionInput) -> PackageManifest {
         // the network: `by_name_hash` only returns a non-expired manifest when
         // `public_max_age > timestamp_for_manifest_cache_control` (current time).
         public_max_age: u32::MAX,
+        // Required when `minimumReleaseAge` is configured — bun refetches any
+        // cached manifest without extended data. Zeroed publish timestamps
+        // pass every age gate.
+        has_extended_manifest: true,
         ..NpmPackage::default()
     };
     // releases: keys index the `versions` buffer, values index `package_versions`.
@@ -298,7 +311,12 @@ impl<'a> Reader<'a> {
         for i in 0..n {
             // SAFETY: region is `byte_len` long, n elements of size_of::<T>.
             let v = unsafe {
-                std::ptr::read_unaligned(region.as_ptr().add(i * std::mem::size_of::<T>()).cast::<T>())
+                std::ptr::read_unaligned(
+                    region
+                        .as_ptr()
+                        .add(i * std::mem::size_of::<T>())
+                        .cast::<T>(),
+                )
             };
             out.push(v);
         }
@@ -310,7 +328,8 @@ impl<'a> Reader<'a> {
 /// Deserialize a `.npm` byte buffer back into a [`ReadManifest`]. Returns `None`
 /// if the header does not match.
 pub fn read(bytes: &[u8]) -> Option<ReadManifest> {
-    if bytes.len() < serialize::HEADER.len() || &bytes[..serialize::HEADER.len()] != serialize::HEADER
+    if bytes.len() < serialize::HEADER.len()
+        || &bytes[..serialize::HEADER.len()] != serialize::HEADER
     {
         return None;
     }
@@ -407,8 +426,10 @@ impl<'a> ReadPackageVersion<'a> {
         let n_off = map.name.off as usize;
         let v_off = map.value.off as usize;
         for i in 0..map.name.len as usize {
-            let name_bytes =
-                resolve_str(&self.manifest.external_strings[n_off + i], &self.manifest.string_buf);
+            let name_bytes = resolve_str(
+                &self.manifest.external_strings[n_off + i],
+                &self.manifest.string_buf,
+            );
             let val_bytes = resolve_str(
                 &self.manifest.external_strings_for_versions[v_off + i],
                 &self.manifest.string_buf,

@@ -94,9 +94,11 @@ fn neoconfetti_round_trip() {
 
 /// Construct a `PackageMeta` for @neoconfetti/svelte 2.2.2 from the fixture.
 fn neoconfetti_meta() -> meta::PackageMeta {
-    let fixture =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/neoconfetti.json"))
-            .expect("neoconfetti.json fixture missing");
+    let fixture = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/neoconfetti.json"
+    ))
+    .expect("neoconfetti.json fixture missing");
     serde_json::from_str(&fixture).expect("failed to parse neoconfetti.json")
 }
 
@@ -130,14 +132,20 @@ fn builder_round_trips() {
         pkg.versions[0].tarball_url,
         "tarball_url must survive round-trip"
     );
-    assert_eq!(parsed.public_max_age(), u32::MAX, "manifest must never expire");
+    assert_eq!(
+        parsed.public_max_age(),
+        u32::MAX,
+        "manifest must never expire"
+    );
 }
 
 /// Construct a `PackageMeta` for `ms` with two versions from the fixture.
 fn ms_meta() -> meta::PackageMeta {
-    let fixture =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ms.json"))
-            .expect("ms.json fixture missing");
+    let fixture = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/ms.json"
+    ))
+    .expect("ms.json fixture missing");
     serde_json::from_str(&fixture).expect("failed to parse ms.json")
 }
 
@@ -159,7 +167,15 @@ fn builder_multi_version() {
     let parsed = read(&out).expect("header must parse");
 
     assert_eq!(parsed.name(), b"ms");
-    assert_eq!(parsed.public_max_age(), u32::MAX, "manifest must never expire");
+    assert_eq!(
+        parsed.public_max_age(),
+        u32::MAX,
+        "manifest must never expire"
+    );
+    assert!(
+        parsed.pkg.has_extended_manifest,
+        "manifests must claim extended data or bun refetches them when minimumReleaseAge is set"
+    );
 
     // Both versions must be findable and their tarball URLs must survive.
     for vm in &pkg.versions {
@@ -222,7 +238,9 @@ fn peer_dep_optional_ordering_round_trip() {
     .unwrap();
 
     let parsed = read(&out).expect("manifest must parse");
-    let v = parsed.find_version("1.0.0").expect("version 1.0.0 must be present");
+    let v = parsed
+        .find_version("1.0.0")
+        .expect("version 1.0.0 must be present");
 
     let total = v.pv.peer_dependencies.name.len as usize;
     let start = v.pv.non_optional_peer_dependencies_start as usize;
@@ -299,8 +317,14 @@ fn prerelease_round_trip() {
     let built = build::build_manifest(&pkg);
     let parsed = read(&write_default_registry(&built)).expect("manifest must parse");
 
-    assert_eq!(parsed.pkg.releases.keys.len, 0, "no release versions expected");
-    assert_eq!(parsed.pkg.prereleases.keys.len, 1, "the pre-release must be in prereleases");
+    assert_eq!(
+        parsed.pkg.releases.keys.len, 0,
+        "no release versions expected"
+    );
+    assert_eq!(
+        parsed.pkg.prereleases.keys.len, 1,
+        "the pre-release must be in prereleases"
+    );
 
     let key = parsed.versions[parsed.pkg.prereleases.keys.off as usize];
     assert_eq!((key.major, key.minor, key.patch), (3, 0, 1));
@@ -368,7 +392,12 @@ fn mixed_release_prerelease_round_trip() {
         let v = parsed
             .find_version(&vm.version)
             .unwrap_or_else(|| panic!("version {} must be present", vm.version));
-        assert_eq!(v.tarball_url(), vm.tarball_url, "tarball_url for {}", vm.version);
+        assert_eq!(
+            v.tarball_url(),
+            vm.tarball_url,
+            "tarball_url for {}",
+            vm.version
+        );
     }
 }
 
@@ -418,13 +447,19 @@ fn npmmirror_url_hash_and_filename() {
     let href = "https://registry.npmmirror.com";
     assert_eq!(manifest::url_hash(href), 0x02200d3777602379);
     // Trailing slash is stripped before hashing.
-    assert_eq!(manifest::url_hash("https://registry.npmmirror.com/"), 0x02200d3777602379);
+    assert_eq!(
+        manifest::url_hash("https://registry.npmmirror.com/"),
+        0x02200d3777602379
+    );
     assert_eq!(manifest::registry_href_len(href), 30);
     assert_eq!(
         manifest::manifest_file_name("react", Some(href)),
         "94c49019ded8e790-02200d3777602379.npm"
     );
-    assert_eq!(manifest::manifest_file_name("react", None), "94c49019ded8e790.npm");
+    assert_eq!(
+        manifest::manifest_file_name("react", None),
+        "94c49019ded8e790.npm"
+    );
 }
 
 /// The generalized hash must reproduce bun's DEFAULT_URL_HASH for the

@@ -69,7 +69,9 @@ pub fn build_manifest(pkg: &PackageMeta) -> PackageManifest {
     // version-string tiebreak keeps output deterministic when two tags compare
     // equal (e.g. "1" vs "01").
     releases.sort_by(|a, b| {
-        triple(&a.1).cmp(&triple(&b.1)).then_with(|| a.0.version.cmp(&b.0.version))
+        triple(&a.1)
+            .cmp(&triple(&b.1))
+            .then_with(|| a.0.version.cmp(&b.0.version))
     });
     prereleases.sort_by(|a, b| {
         triple(&a.1)
@@ -114,6 +116,12 @@ pub fn build_manifest(pkg: &PackageMeta) -> PackageManifest {
         // Never expire — so bun treats this manifest as fresh indefinitely
         // under BUN_MANIFEST_CACHE=2 (verified in the Task 3 spike).
         public_max_age: u32::MAX,
+        // With `minimumReleaseAge` configured, bun rejects any cached manifest
+        // lacking extended data (publish timestamps) and refetches it — fatal
+        // offline. Our zeroed `publish_timestamp_ms` reads as "published at
+        // epoch", which passes every age gate; correct for lockfile-pinned
+        // versions.
+        has_extended_manifest: true,
         ..NpmPackage::default()
     };
 
@@ -170,7 +178,9 @@ fn build_one_version(
         arena,
         names,
         values,
-        vm.optional_dependencies.iter().map(|(k, v)| (k.clone(), v.clone())),
+        vm.optional_dependencies
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone())),
     );
 
     // Peer dependencies: bun's ABI places **optional** peers at the FRONT of
@@ -193,16 +203,20 @@ fn build_one_version(
 
     // `non_optional_peer_dependencies_start` = number of optional peers
     // (= the index at which non-optional peers begin).
-    let opt_count =
-        vm.peer_dependencies.keys().filter(|k| optional_peer_set.contains(k.as_str())).count()
-            as u32;
+    let opt_count = vm
+        .peer_dependencies
+        .keys()
+        .filter(|k| optional_peer_set.contains(k.as_str()))
+        .count() as u32;
 
     // Build the combined peer group in one pass (optional then non-optional).
     let peer_dependencies = build_dep_group(
         arena,
         names,
         values,
-        opt_peers.chain(non_opt_peers).map(|(k, v)| (k.clone(), v.clone())),
+        opt_peers
+            .chain(non_opt_peers)
+            .map(|(k, v)| (k.clone(), v.clone())),
     );
 
     // Integrity: decode SRI string → raw tag + digest bytes.
@@ -278,7 +292,11 @@ fn decode_base64(input: &str) -> Option<Vec<u8>> {
     while i < bytes.len() {
         let remaining = bytes.len() - i;
         let a = b64_val(bytes[i])?;
-        let b = if remaining > 1 { b64_val(bytes[i + 1])? } else { return None };
+        let b = if remaining > 1 {
+            b64_val(bytes[i + 1])?
+        } else {
+            return None;
+        };
         out.push((a << 2) | (b >> 4));
         if remaining > 2 {
             let c = b64_val(bytes[i + 2])?;
@@ -444,12 +462,7 @@ fn build_bin(
                 tag: 2, // NamedFile
                 _padding_tag: [0; 3],
                 value: BinValue {
-                    raw: [
-                        ss_lo(&k_ss),
-                        ss_hi(&k_ss),
-                        ss_lo(&v_ss),
-                        ss_hi(&v_ss),
-                    ],
+                    raw: [ss_lo(&k_ss), ss_hi(&k_ss), ss_lo(&v_ss), ss_hi(&v_ss)],
                 },
             }
         }
@@ -464,7 +477,9 @@ fn build_bin(
             Bin {
                 tag: 4, // Map
                 _padding_tag: [0; 3],
-                value: BinValue { raw: [off, count, 0, 0] },
+                value: BinValue {
+                    raw: [off, count, 0, 0],
+                },
             }
         }
     }
@@ -505,7 +520,10 @@ pub(crate) fn parse_version(s: &str) -> ParsedVersion<'_> {
     let major: u64 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
     let minor: u64 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
     let rest = parts.next().unwrap_or("");
-    let digits_end = rest.bytes().position(|b| !b.is_ascii_digit()).unwrap_or(rest.len());
+    let digits_end = rest
+        .bytes()
+        .position(|b| !b.is_ascii_digit())
+        .unwrap_or(rest.len());
     let patch: u64 = rest[..digits_end].parse().unwrap_or(0);
     let (pre, build) = parse_tag(&rest[digits_end..]);
     ParsedVersion {
@@ -668,7 +686,10 @@ mod tests {
     // 1.0.0-canary.0.0.0.0.0.0 < 1.0.0-canary.0.0.0.0.0.1
     #[test]
     fn order_pre_numeric_segments() {
-        assert_eq!(order_pre("canary.0.0.0.0.0.0", "canary.0.0.0.0.0.1"), Ordering::Less);
+        assert_eq!(
+            order_pre("canary.0.0.0.0.0.0", "canary.0.0.0.0.0.1"),
+            Ordering::Less
+        );
     }
 
     #[test]
@@ -714,10 +735,7 @@ mod tests {
             parse_os(&strs(&["!win32"])).0,
             OperatingSystem::ALL_VALUE & !OperatingSystem::WIN32
         );
-        assert_eq!(
-            parse_cpu(&strs(&["x64", "!arm64"])).0,
-            Architecture::X64
-        );
+        assert_eq!(parse_cpu(&strs(&["x64", "!arm64"])).0, Architecture::X64);
     }
 
     // ["any", "linux"] collapses to LINUX: a recognized token resets the
