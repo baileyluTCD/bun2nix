@@ -31,6 +31,9 @@
         imports = lib.pipe ./nix [
           lib.filesystem.listFilesRecursive
           (lib.filter (lib.hasSuffix ".nix"))
+          # Exclude fixture subdirectories — their bun.nix files are package
+          # expressions (called via pkgs.callPackage), not flake-parts modules.
+          (lib.filter (path: !lib.hasInfix "/fixture/" (toString path)))
         ];
       }
     );

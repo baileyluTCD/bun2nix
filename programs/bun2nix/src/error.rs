@@ -77,6 +77,8 @@ See https://bun.sh/docs/install/lockfile to find out more information about the 
 Try `bun2nix -h` for help.
     ")]
     ReadLockfileError(#[from] io::Error),
+    #[error("Failed to parse project-local registry config (bunfig.toml / .npmrc):\n{0}")]
+    RegistryConfig(#[from] bun2nix_core::config::ConfigError),
 }
 
 #[cfg(target_arch = "wasm32")]

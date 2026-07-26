@@ -136,7 +136,7 @@ in
           cacheEntryPhase = ''
             runHook preCacheEntry
 
-            "${lib.getExe self'.packages.cacheEntryCreator}" \
+            "${lib.getExe self'.packages.cacheEntryCreator}" symlink \
               --out "$out/share/bun-cache" \
               --name "${name}" \
               --package "$out/share/bun-packages/${name}" \

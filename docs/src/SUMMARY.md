@@ -12,4 +12,5 @@
   - [`fetchBunDeps`](./building-packages/fetchBunDeps.md)
   - [`writeBunApplication`](./building-packages/writeBunApplication.md)
   - [`writeBunScriptBin`](./building-packages/writeBunScriptBin.md)
+- [Offline Peer Dependency Resolution](./peer-dependency-resolution.md)
 - [V2 Update Guide](./v2-update-guide.md)

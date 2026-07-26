@@ -1,0 +1,20 @@
+{
+  "name": "@neoconfetti/svelte",
+  "versions": [
+    {
+      "version": "2.2.2",
+      "tarball_url": "https://registry.npmjs.org/@neoconfetti/svelte/-/svelte-2.2.2.tgz",
+      "integrity": "sha512-E7xCFVEEm5Ctnj2udTJy1b9oaTvjz1zi1mYdEtE8rB5BVwq6kHisosDS+zdWN5PMfEMjtbsOV9Cl6tsNSAD1sA==",
+      "dependencies": {},
+      "peer_dependencies": {
+        "svelte": "^3.0.0 || ^4.0.0 || ^5.0.0"
+      },
+      "optional_dependencies": {},
+      "optional_peers": [],
+      "bin": {},
+      "os": [],
+      "cpu": [],
+      "has_install_script": false
+    }
+  ]
+}

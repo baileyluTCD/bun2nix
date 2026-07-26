@@ -14,6 +14,6 @@
 }:
 {
   {%- for pkg in packages %}
-  "{{ pkg.name }}" = {{ pkg.fetcher }};
+  "{{ pkg.name }}" = {{ pkg.fetcher }}{{ pkg.manifest_nix() }};
   {%- endfor %}
 }

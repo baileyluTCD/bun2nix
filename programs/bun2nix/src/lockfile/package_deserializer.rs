@@ -1,3 +1,7 @@
+use std::collections::BTreeMap;
+
+use bun2nix_core::manifest::meta::VersionMeta;
+
 use crate::{
     Package,
     error::{Error, Result},
@@ -6,6 +10,101 @@ use crate::{
 
 mod prefetch;
 pub use prefetch::Prefetch;
+
+/// The dependency-graph metadata bun stores inline as element 2 of an npm
+/// lockfile entry (`[id, url, meta, hash]`). Mirrors the per-version fields of
+/// the abbreviated npm registry manifest, which is why it reconstructs the same
+/// `VersionMeta` the network path used to fetch.
+#[derive(serde::Deserialize)]
+struct RawLockMeta {
+    #[serde(default)]
+    dependencies: BTreeMap<String, String>,
+    #[serde(rename = "optionalDependencies", default)]
+    optional_dependencies: BTreeMap<String, String>,
+    #[serde(rename = "peerDependencies", default)]
+    peer_dependencies: BTreeMap<String, String>,
+    /// Already split out by bun (no `peerDependenciesMeta` reconstruction needed).
+    #[serde(rename = "optionalPeers", default)]
+    optional_peers: Vec<String>,
+    #[serde(default)]
+    bin: RawBin,
+    #[serde(default)]
+    os: RawStringList,
+    #[serde(default)]
+    cpu: RawStringList,
+}
+
+/// npm `bin` can be a bare string or a `{ name: path }` object.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum RawBin {
+    Str(String),
+    Map(BTreeMap<String, String>),
+}
+
+impl Default for RawBin {
+    fn default() -> Self {
+        RawBin::Map(BTreeMap::new())
+    }
+}
+
+/// `os`/`cpu` in bun.lock metadata can be a bare string (bun collapses
+/// single-element lists, e.g. `"cpu": "x64"` or `"os": "none"`) or an array.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum RawStringList {
+    Str(String),
+    List(Vec<String>),
+}
+
+impl Default for RawStringList {
+    fn default() -> Self {
+        RawStringList::List(Vec::new())
+    }
+}
+
+impl From<RawStringList> for Vec<String> {
+    fn from(v: RawStringList) -> Self {
+        match v {
+            RawStringList::Str(s) => vec![s],
+            RawStringList::List(l) => l,
+        }
+    }
+}
+
+impl RawLockMeta {
+    /// Build the registry-shaped `VersionMeta` for `<name>@<version>` using the
+    /// already-derived `tarball_url`. `integrity` is left empty (the Nix layer
+    /// fills it from the entry hash) and `has_install_script` is `false` (the
+    /// lockfile carries no install-script signal).
+    fn into_version_meta(self, ident: &str, tarball_url: &str) -> Result<VersionMeta> {
+        let (name, version) = ident
+            .rsplit_once('@')
+            .ok_or(Error::NoAtInPackageIdentifier)?;
+
+        // For a bare-string bin, npm/bun key it by the package-name basename
+        // (the last path segment, dropping any `@scope/`).
+        let basename = name.rsplit('/').next().unwrap_or(name);
+        let bin = match self.bin {
+            RawBin::Str(path) => [(basename.to_string(), path)].into_iter().collect(),
+            RawBin::Map(map) => map,
+        };
+
+        Ok(VersionMeta {
+            version: version.to_string(),
+            tarball_url: tarball_url.to_string(),
+            integrity: String::new(),
+            dependencies: self.dependencies,
+            peer_dependencies: self.peer_dependencies,
+            optional_dependencies: self.optional_dependencies,
+            optional_peers: self.optional_peers,
+            bin,
+            os: self.os.into(),
+            cpu: self.cpu.into(),
+            has_install_script: false,
+        })
+    }
+}
 
 type Values = Vec<serde_json::Value>;
 
@@ -26,16 +125,41 @@ impl PackageDeserializer {
     /// # Deserialize package
     ///
     /// Deserialize a given package from it's lockfile representation
+    ///
+    /// Entries are dispatched on the identifier's resolution (the part after
+    /// the package name), not on tuple arity: bun emits github entries with
+    /// an integrity hash (arity 4) and remote/vendored tarball entries with
+    /// inline metadata (arity 3), so arity alone cannot tell entry kinds
+    /// apart.
     pub fn deserialize_package(name: String, values: Values) -> Result<Package> {
         let arity = values.len();
         let deserializer = Self { name, values };
 
-        match arity {
-            1 => deserializer.deserialize_workspace_package(),
-            2 => deserializer.deserialize_tarball_or_file_package(),
-            3 => deserializer.deserialize_tarball_git_or_github_package(),
-            4 => deserializer.deserialize_npm_package(),
-            x => Err(Error::UnexpectedPackageEntryLength(x)),
+        if arity == 1 {
+            return deserializer.deserialize_workspace_package();
+        }
+        if !(2..=4).contains(&arity) {
+            return Err(Error::UnexpectedPackageEntryLength(arity));
+        }
+
+        let resolution = deserializer
+            .values
+            .first()
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+            .and_then(drain_package_specifier)
+            .ok_or(Error::NoAtInPackageIdentifier)?;
+
+        if resolution.starts_with("github:") {
+            Self::deserialize_github_package(resolution)
+        } else if resolution.starts_with("git+") {
+            Self::deserialize_git_package(resolution)
+        } else if resolution.starts_with("http://") || resolution.starts_with("https://") {
+            Self::deserialize_tarball_package(resolution)
+        } else if arity == 4 {
+            deserializer.deserialize_npm_package()
+        } else {
+            Self::deserialize_file_package(deserializer.name, resolution)
         }
     }
 
@@ -53,7 +177,7 @@ impl PackageDeserializer {
         // [identifier, tarball_url, metadata, hash]
         // - identifier: "name@version"
         // - tarball_url: "" for default registry, or exact URL to tarball
-        // - metadata: object with dependencies, bin, etc.
+        // - metadata: object with dependencies, peerDependencies, bin, etc.
         // - hash: integrity hash (sha512-...)
 
         let npm_identifier_raw = swap_remove_value(&mut self.values, 0);
@@ -62,8 +186,6 @@ impl PackageDeserializer {
         let hash = swap_remove_value(&mut self.values, 0);
         // After swap_remove(0): [meta, tarball_url]
 
-        // Get the tarball URL from what's now at index 1
-        // (originally at index 1, but the metadata swapped in at index 0)
         let tarball_url = self
             .values
             .get(1)
@@ -77,37 +199,28 @@ impl PackageDeserializer {
 
         let fetcher = Fetcher::new_npm_package(&npm_identifier_raw, hash, tarball_url)?;
 
-        Ok(Package::new(npm_identifier_raw, fetcher))
-    }
-
-    /// # Deserialize a Tarball, Git or Github Package
-    ///
-    /// Deserialize a tarball, git or github package from it's bun
-    /// lockfile representation
-    ///
-    /// These are grouped together as all three lockfile
-    /// representations are a tuple of arity 3, hence the
-    /// specifier prefix decides between them - `http` is a
-    /// tarball (bun records an integrity hash for these), `github:`
-    /// is a github package, and anything else is a git package
-    pub fn deserialize_tarball_git_or_github_package(mut self) -> Result<Package> {
-        let id = swap_remove_value(&mut self.values, 0);
-        let specifier = drain_package_specifier(id).ok_or(Error::NoAtInPackageIdentifier)?;
-
-        if specifier.starts_with("http") {
-            Self::deserialize_tarball_package(specifier)
-        } else if specifier.starts_with("github:") {
-            Self::deserialize_github_package(specifier)
+        // Every npm entry carries an offline manifest reconstructed from the
+        // inline metadata object (index 0 after the swaps: `[meta, tarball_url]`).
+        // The tarball URL is the fetcher's: inferred for the default registry,
+        // verbatim from the lockfile otherwise.
+        let manifest = if let Fetcher::FetchUrl { url, .. } = &fetcher {
+            let raw: RawLockMeta = serde_json::from_value(self.values.swap_remove(0))?;
+            Some(raw.into_version_meta(&npm_identifier_raw, url)?)
         } else {
-            Self::deserialize_git_package(specifier)
-        }
+            None
+        };
+
+        let package = Package::new(npm_identifier_raw, fetcher);
+        Ok(match manifest {
+            Some(m) => package.with_manifest(m),
+            None => package,
+        })
     }
 
     /// # Deserialize a Github Package
     ///
-    /// Deserialize a github package from it's bun lockfile representation
-    ///
-    /// This is found in the source as a tuple of arity 3
+    /// Deserialize a github package from its `github:owner/repo#rev`
+    /// resolution
     pub fn deserialize_github_package(id: String) -> Result<Package> {
         let (url, rev) = split_once_owned(id, '#').ok_or(Error::MissingGitRef)?;
 
@@ -131,9 +244,7 @@ impl PackageDeserializer {
 
     /// # Deserialize a Git Package
     ///
-    /// Deserialize a git package from it's bun lockfile representation
-    ///
-    /// This is found in the source as a tuple of arity 3
+    /// Deserialize a git package from its `git+<url>#<rev>` resolution
     pub fn deserialize_git_package(id: String) -> Result<Package> {
         let git_url = drop_prefix(id, "git+");
         let (url, rev) = split_once_owned(git_url, '#').ok_or(Error::MissingGitRef)?;
@@ -150,26 +261,6 @@ impl PackageDeserializer {
         };
 
         Ok(Package::new(id_with_rev, fetcher))
-    }
-
-    /// # Deserialize a tarball or file package
-    ///
-    /// Deserialize a tarball or file package from it's bun
-    /// lockfile representation
-    ///
-    /// These are grouped together as both lockfile
-    /// representations are a tupe of arity 2, hence
-    /// paths starting with `http` are considered
-    /// tarballs
-    pub fn deserialize_tarball_or_file_package(mut self) -> Result<Package> {
-        let id = swap_remove_value(&mut self.values, 0);
-        let path = drain_package_specifier(id).ok_or(Error::NoAtInPackageIdentifier)?;
-
-        if path.starts_with("http") {
-            Self::deserialize_tarball_package(path)
-        } else {
-            Self::deserialize_file_package(self.name, path)
-        }
     }
 
     /// # Deserialize a file package
@@ -191,11 +282,13 @@ impl PackageDeserializer {
             "File path can never contain http, because then it would be a tarball"
         );
 
-        // Strip prefix: explicit "file:" or implicit "./" (Bun strips file: for local tarballs)
+        // Strip prefix: explicit "file:" or implicit "./" (Bun strips file: for
+        // local tarballs).  Vendored tarballs appear as bare relative paths
+        // (e.g. "vendor/pkg-1.0.0.tgz") with no prefix at all.
         let path = path
             .strip_prefix("file:")
             .or_else(|| path.strip_prefix("./"))
-            .ok_or(Error::MissingFileSpecifier)?;
+            .unwrap_or(&path);
 
         Ok(Package::new(
             name,
@@ -363,4 +456,194 @@ pub fn drop_prefix(mut input: String, prefix: &str) -> String {
     }
 
     input
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const SHA: &str = "sha512-t0BRVXvbiE/o20Hfw669rLbMCDWtYZLvmJigy2f0MxsXF+71pxhR3xOkspmsO8h3ZlNzyibAmtCa3l4lYKk6gQ==";
+
+    // A plain npm entry (arity 4, bare version resolution) still routes to the
+    // npm deserializer.
+    #[test]
+    fn npm_entry_dispatches_to_npm_package() {
+        let values = vec![
+            json!("react-dom@19.2.7"),
+            json!(""),
+            json!({ "dependencies": { "scheduler": "^0.27.0" } }),
+            json!(SHA),
+        ];
+
+        let pkg = PackageDeserializer::deserialize_package("react-dom".into(), values).unwrap();
+        assert!(
+            matches!(pkg.fetcher, Fetcher::FetchUrl { ref url, .. }
+                if url == "https://registry.npmjs.org/react-dom/-/react-dom-19.2.7.tgz"),
+            "expected FetchUrl, got {:?}",
+            pkg.fetcher
+        );
+    }
+
+    // Vendored tarballs are arity-3 entries whose resolution is a bare
+    // relative path: [id, meta, integrity].
+    #[test]
+    fn vendored_tarball_dispatches_to_file_package() {
+        let values = vec![
+            json!("@opencode-ai/client@vendor/opencode-ai-client-1.17.13.tgz"),
+            json!({}),
+            json!(SHA),
+        ];
+
+        let pkg = PackageDeserializer::deserialize_package(
+            "@opencode-ai/app/@opencode-ai/client".into(),
+            values,
+        )
+        .unwrap();
+
+        assert!(
+            matches!(pkg.fetcher, Fetcher::CopyToStore { ref path }
+                if path == "vendor/opencode-ai-client-1.17.13.tgz"),
+            "expected CopyToStore, got {:?}",
+            pkg.fetcher
+        );
+    }
+
+    // file: and ./ prefixes are still stripped from file-package paths.
+    #[test]
+    fn prefixed_file_paths_are_stripped() {
+        for id in ["local-pkg@file:local/pkg.tgz", "local-pkg@./local/pkg.tgz"] {
+            let values = vec![json!(id), json!(SHA)];
+            let pkg = PackageDeserializer::deserialize_package("local-pkg".into(), values).unwrap();
+            assert!(
+                matches!(pkg.fetcher, Fetcher::CopyToStore { ref path } if path == "local/pkg.tgz"),
+                "expected stripped CopyToStore for {id}, got {:?}",
+                pkg.fetcher
+            );
+        }
+    }
+
+    #[test]
+    fn npm_entry_reconstructs_manifest_from_lockfile_meta() {
+        let values = vec![
+            json!("react-dom@19.2.7"),
+            json!(""),
+            json!({
+                "dependencies": { "scheduler": "^0.27.0" },
+                "peerDependencies": { "react": "^19.2.7" }
+            }),
+            json!(SHA),
+        ];
+
+        let pkg = PackageDeserializer::deserialize_package("react-dom".into(), values).unwrap();
+        let m = pkg
+            .manifest
+            .expect("a default-registry npm entry must carry a manifest");
+
+        assert_eq!(m.version, "19.2.7");
+        assert_eq!(
+            m.tarball_url,
+            "https://registry.npmjs.org/react-dom/-/react-dom-19.2.7.tgz"
+        );
+        assert!(
+            m.integrity.is_empty(),
+            "integrity is reused from the entry hash"
+        );
+        assert_eq!(
+            m.dependencies.get("scheduler"),
+            Some(&"^0.27.0".to_string())
+        );
+        assert_eq!(
+            m.peer_dependencies.get("react"),
+            Some(&"^19.2.7".to_string())
+        );
+        assert!(m.optional_dependencies.is_empty());
+        assert!(m.optional_peers.is_empty());
+        assert!(m.bin.is_empty());
+        assert!(m.os.is_empty());
+        assert!(m.cpu.is_empty());
+        assert!(!m.has_install_script);
+    }
+
+    #[test]
+    fn optional_peers_and_object_bin_pass_through() {
+        let values = vec![
+            json!("next@16.0.3"),
+            json!(""),
+            json!({
+                "peerDependencies": { "react": "^19.0.0", "sass": "^1.3.0" },
+                "optionalPeers": ["sass"],
+                "bin": { "next": "dist/bin/next" }
+            }),
+            json!(SHA),
+        ];
+
+        let pkg = PackageDeserializer::deserialize_package("next".into(), values).unwrap();
+        let m = pkg.manifest.unwrap();
+
+        assert_eq!(m.optional_peers, vec!["sass".to_string()]);
+        assert_eq!(m.bin.get("next"), Some(&"dist/bin/next".to_string()));
+    }
+
+    // bun collapses single-element os/cpu lists to bare strings in bun.lock
+    // (e.g. platform packages like @cloudflare/workerd-darwin-64).
+    #[test]
+    fn string_form_os_cpu_parse_as_single_element_lists() {
+        let values = vec![
+            json!("@cloudflare/workerd-darwin-64@1.20251118.0"),
+            json!(""),
+            json!({ "os": "darwin", "cpu": "x64" }),
+            json!(SHA),
+        ];
+
+        let pkg = PackageDeserializer::deserialize_package(
+            "@cloudflare/workerd-darwin-64".into(),
+            values,
+        )
+        .unwrap();
+        let m = pkg.manifest.unwrap();
+
+        assert_eq!(m.os, vec!["darwin".to_string()]);
+        assert_eq!(m.cpu, vec!["x64".to_string()]);
+    }
+
+    #[test]
+    fn bare_string_bin_normalizes_to_scoped_basename() {
+        let values = vec![
+            json!("@neoconfetti/svelte@2.2.2"),
+            json!(""),
+            json!({ "bin": "./cli.js" }),
+            json!(SHA),
+        ];
+
+        let pkg =
+            PackageDeserializer::deserialize_package("@neoconfetti/svelte".into(), values).unwrap();
+        let m = pkg.manifest.unwrap();
+
+        // Bare-string bin maps to { <name-basename>: <path> }.
+        assert_eq!(m.bin.get("svelte"), Some(&"./cli.js".to_string()));
+        assert_eq!(
+            m.tarball_url,
+            "https://registry.npmjs.org/@neoconfetti/svelte/-/svelte-2.2.2.tgz"
+        );
+    }
+
+    #[test]
+    fn non_default_registry_entry_reconstructs_manifest_with_lockfile_url() {
+        let values = vec![
+            json!("foo@1.0.0"),
+            json!("https://npm.example.com/foo/-/foo-1.0.0.tgz"),
+            json!({ "dependencies": { "bar": "^1.0.0" } }),
+            json!(SHA),
+        ];
+
+        let pkg = PackageDeserializer::deserialize_package("foo".into(), values).unwrap();
+        let m = pkg
+            .manifest
+            .expect("non-default-registry npm entries carry a manifest too");
+
+        // The explicit lockfile URL is used verbatim as the tarball URL.
+        assert_eq!(m.tarball_url, "https://npm.example.com/foo/-/foo-1.0.0.tgz");
+        assert_eq!(m.dependencies.get("bar"), Some(&"^1.0.0".to_string()));
+    }
 }

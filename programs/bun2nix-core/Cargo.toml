@@ -1,0 +1,11 @@
+[dependencies]
+serde = {workspace = true}
+serde_json = {workspace = true}
+toml = {workspace = true}
+url = {workspace = true}
+
+[package]
+name = "bun2nix-core"
+edition.workspace = true
+license.workspace = true
+version.workspace = true

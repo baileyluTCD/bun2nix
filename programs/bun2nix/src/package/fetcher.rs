@@ -138,10 +138,10 @@ impl Fetcher {
     /// ```
     pub fn to_npm_url(ident: &str, tarball_url: Option<&str>) -> Result<String> {
         // If an explicit tarball URL is provided, use it directly
-        if let Some(url) = tarball_url {
-            if !url.is_empty() {
-                return Ok(url.to_string());
-            }
+        if let Some(url) = tarball_url
+            && !url.is_empty()
+        {
+            return Ok(url.to_string());
         }
 
         // Otherwise, construct the URL from the default registry

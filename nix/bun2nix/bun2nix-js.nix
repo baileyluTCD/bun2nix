@@ -11,14 +11,19 @@
           pname = "bun2nix-js";
           inherit (config.cargoTOML.package) version;
 
-          src = ../../programs/bun2nix;
+          src = ../../programs;
 
           cargoLock = {
             lockFile = finalAttrs.src + "/Cargo.lock";
           };
 
+          # The `bun2nix` crate path-depends on the sibling `bun2nix-core`
+          # crate, so the build source must be the workspace root. The actual
+          # wasm/js build still runs inside the `bun2nix` crate directory.
+          bunRoot = "bun2nix";
+
           bunDeps = final.bun2nix.fetchBunDeps {
-            bunNix = finalAttrs.src + "/bun.nix";
+            bunNix = finalAttrs.src + "/bun2nix/bun.nix";
           };
 
           nativeBuildInputs = with final; [
@@ -34,6 +39,7 @@
           buildPhase = ''
             runHook preBuild
 
+            cd "$bunRoot"
             bun run build
 
             runHook postBuild
