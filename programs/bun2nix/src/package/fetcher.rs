@@ -135,6 +135,12 @@ impl Fetcher {
     ///     Fetcher::to_npm_url(npm_identifier, Some("https://npm.pkg.github.com/@alloc/quick-lru/-/quick-lru-5.2.0.tgz")).unwrap(),
     ///     "https://npm.pkg.github.com/@alloc/quick-lru/-/quick-lru-5.2.0.tgz"
     /// );
+    ///
+    /// // Unscoped packages
+    /// assert_eq!(
+    ///     Fetcher::to_npm_url("zod@3.21.4", None).unwrap(),
+    ///     "https://registry.npmjs.org/zod/-/zod-3.21.4.tgz"
+    /// );
     /// ```
     pub fn to_npm_url(ident: &str, tarball_url: Option<&str>) -> Result<String> {
         // If an explicit tarball URL is provided, use it directly
@@ -144,25 +150,26 @@ impl Fetcher {
             }
         }
 
-        // Otherwise, construct the URL from the default registry
-        let Some((user, name_and_ver)) = ident.split_once("/") else {
-            let Some((name, ver)) = ident.split_once("@") else {
-                return Err(Error::NoAtInPackageIdentifier);
-            };
+        // Otherwise, construct the URL from the default registry.
+        //
+        // A scoped package's leading `@` belongs to its name, so the separator
+        // is the first `@` after it. Splitting on `/` to find the scope would
+        // misread any `/` the specifier itself contains.
+        let search_start = usize::from(ident.starts_with('@'));
+        let sep = ident[search_start..]
+            .find('@')
+            .ok_or(Error::NoAtInPackageIdentifier)?
+            + search_start;
 
-            return Ok(format!(
-                "{}{}/-/{}-{}.tgz",
-                DEFAULT_REGISTRY, name, name, ver
-            ));
-        };
+        let (name, ver) = (&ident[..sep], &ident[sep + 1..]);
 
-        let Some((name, ver)) = name_and_ver.split_once("@") else {
-            return Err(Error::NoAtInPackageIdentifier);
-        };
+        // The tarball is served under the full (possibly scoped) name, but its
+        // filename drops the scope
+        let unscoped = name.rsplit('/').next().unwrap_or(name);
 
         Ok(format!(
-            "{}{}/{}/-/{}-{}.tgz",
-            DEFAULT_REGISTRY, user, name, name, ver
+            "{}{}/-/{}-{}.tgz",
+            DEFAULT_REGISTRY, name, unscoped, ver
         ))
     }
 }

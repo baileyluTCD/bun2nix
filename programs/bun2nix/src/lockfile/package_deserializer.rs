@@ -34,9 +34,27 @@ impl PackageDeserializer {
             1 => deserializer.deserialize_workspace_package(),
             2 => deserializer.deserialize_tarball_or_file_package(),
             3 => deserializer.deserialize_tarball_git_or_github_package(),
+            // Newer versions of bun record an integrity hash for git and
+            // github dependencies, which gives their entries the same arity
+            // as an npm package. Dispatch on the specifier so they are not
+            // mistaken for one.
+            4 if deserializer.has_git_or_github_specifier() => {
+                deserializer.deserialize_tarball_git_or_github_package()
+            }
             4 => deserializer.deserialize_npm_package(),
             x => Err(Error::UnexpectedPackageEntryLength(x)),
         }
+    }
+
+    /// # Has a Git or Github Specifier
+    ///
+    /// Peek at the entry's identifier to decide whether it describes a git or
+    /// github dependency, without consuming the entry.
+    fn has_git_or_github_specifier(&self) -> bool {
+        self.values
+            .first()
+            .and_then(|value| value.as_str())
+            .is_some_and(is_git_or_github_identifier)
     }
 
     /// # Deserialize an NPM Package
@@ -90,6 +108,10 @@ impl PackageDeserializer {
     /// specifier prefix decides between them - `http` is a
     /// tarball (bun records an integrity hash for these), `github:`
     /// is a github package, and anything else is a git package
+    ///
+    /// Newer versions of bun append an integrity hash to git and github
+    /// entries, making them a tuple of arity 4; only the identifier is
+    /// needed here, so both shapes are handled by this method
     pub fn deserialize_tarball_git_or_github_package(mut self) -> Result<Package> {
         let id = swap_remove_value(&mut self.values, 0);
         let specifier = drain_package_specifier(id).ok_or(Error::NoAtInPackageIdentifier)?;
@@ -316,6 +338,43 @@ pub fn drain_package_specifier(mut id: String) -> Option<String> {
     let sep = id[search_start..].find('@')? + search_start;
 
     Some(id.drain(sep + 1..).collect())
+}
+
+/// # Is a Git or Github Package Identifier
+///
+/// Checks whether a bun package identifier of the form `<name>@<specifier>`
+/// resolves to a git or github dependency.
+///
+/// Bun writes these as `<name>@github:<owner>/<repo>#<rev>` or
+/// `<name>@git+<url>#<rev>`, which cannot be told apart from an npm identifier
+/// by the entry's arity alone once bun records an integrity hash for them.
+///
+///```rust
+/// use bun2nix::lockfile::is_git_or_github_identifier;
+///
+/// // Github dependencies, scoped and unscoped
+/// assert!(is_git_or_github_identifier("dayjs@github:iamkun/dayjs#45bf6a3"));
+/// assert!(is_git_or_github_identifier("@solidjs/start@github:solidjs/start#dfb2020"));
+///
+/// // Git dependencies
+/// assert!(is_git_or_github_identifier(
+///     "@my/pkg@git+ssh://git@github.com/my/pkg.git#abc123"
+/// ));
+///
+/// // Npm dependencies and malformed identifiers are not
+/// assert!(!is_git_or_github_identifier("@types/bun@1.2.4"));
+/// assert!(!is_git_or_github_identifier("zod@3.21.4"));
+/// assert!(!is_git_or_github_identifier(
+///     "zod@https://registry.npmjs.org/zod/-/zod-3.21.4.tgz"
+/// ));
+/// assert!(!is_git_or_github_identifier("no-at-here"));
+/// ```
+pub fn is_git_or_github_identifier(id: &str) -> bool {
+    let Some(specifier) = drain_package_specifier(id.to_owned()) else {
+        return false;
+    };
+
+    specifier.starts_with("github:") || specifier.starts_with("git+")
 }
 
 /// # Split Once (Owned)
