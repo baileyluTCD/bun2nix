@@ -31,16 +31,9 @@ in
         ];
         substitutions = {
           resolveCatalogTs = ./resolve-catalog.ts;
-          bunDefaultInstallFlags =
-            if pkgs.stdenv.hostPlatform.isDarwin then
-              [
-                "--linker=isolated"
-                "--backend=symlink"
-              ]
-            else
-              [
-                "--linker=isolated"
-              ];
+          bunDefaultInstallFlags = lib.concatStringsSep " " (
+            [ "--linker=isolated" ] ++ lib.optional pkgs.stdenv.hostPlatform.isDarwin "--backend=symlink"
+          );
         };
       } ./hook.sh;
     };
